@@ -7,6 +7,7 @@ def get_parser():
     parser.add_argument("input_file", help="File with YouTube URLs")
     parser.add_argument("--comments", type=int, default=100, help="Max comments to parse")
     parser.add_argument("--all-comments", action="store_true", help="Parse ALL comments")
+    parser.add_argument("--no-subtitles", action="store_true", help="Skip subtitle download and directly download audio for transcription")
     return parser
 
 def load_config(config_path="config.yaml"):
@@ -98,19 +99,27 @@ class Transcriber:
             )
         return str(transcription)
 
-def run_yt_dlp(url: str, output_template: str):
+def run_yt_dlp(url: str, output_template: str, no_subtitles: bool = False):
     import subprocess
     cmd = [
         "yt-dlp",
         "--write-info-json",
         "--write-comments",
-        "--write-subs",
-        "--write-auto-subs",
-        "--sub-lang", "en",
-        "--skip-download",
+    ]
+    if not no_subtitles:
+        cmd.extend([
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-lang", "en",
+        ])
+    else:
+        cmd.extend([
+            "--skip-download",
+        ])
+    cmd.extend([
         "--output", output_template,
         url
-    ]
+    ])
     subprocess.run(cmd, capture_output=True, check=True)
 
 def download_audio(url: str, output_template: str) -> Optional[str]:
@@ -130,24 +139,24 @@ def download_audio(url: str, output_template: str) -> Optional[str]:
     except subprocess.CalledProcessError:
         return None
 
-def get_transcript(base_name: str, url: str, config: dict, console) -> str:
+def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles: bool = False) -> str:
     import glob, os
-    vtt_files = glob.glob(f"{base_name}*.vtt")
-    if vtt_files:
-        console.print(f"[green]Subtitle file found: {os.path.basename(vtt_files[0])}[/green]")
-        with open(vtt_files[0], 'r', encoding='utf-8') as f:
-            lines = [l for l in f.readlines() if "WEBVTT" not in l and l.strip()]
-            return "".join(lines)
+    if not no_subtitles:
+        vtt_files = glob.glob(f"{base_name}*.vtt")
+        if vtt_files:
+            console.print(f"[green]Subtitle file found: {os.path.basename(vtt_files[0])}[/green]")
+            with open(vtt_files[0], 'r', encoding='utf-8') as f:
+                lines = [l for l in f.readlines() if "WEBVTT" not in l and l.strip()]
+                return "".join(lines)
 
-    if config.get('download_audio_if_missing_subs', True):
-        console.print("[yellow]No subtitles found. Initiating transcription workflow...[/yellow]")
-        audio_path = download_audio(url, base_name)
-        if audio_path:
-            transcriber = Transcriber(config)
-            transcript = transcriber.transcribe(audio_path, console)
-            if os.path.exists(audio_path):
-                os.remove(audio_path)
-            return transcript
+    console.print("[yellow]Initiating transcription workflow...[/yellow]")
+    audio_path = download_audio(url, base_name)
+    if audio_path:
+        transcriber = Transcriber(config)
+        transcript = transcriber.transcribe(audio_path, console)
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+        return transcript
     return "[No transcript available]"
 
 def process_comments(data: dict, limit: int, fetch_all: bool) -> str:
@@ -247,7 +256,7 @@ def main(args):
         console.rule(f"[bold green]Processing {video_id}")
 
         try:
-            run_yt_dlp(url, base_name)
+            run_yt_dlp(url, base_name, args.no_subtitles)
         except Exception as e:
             console.print(f"[red]yt-dlp failed: {e}[/red]")
             continue
@@ -256,7 +265,7 @@ def main(args):
         with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        transcript = get_transcript(base_name, url, config, console)
+        transcript = get_transcript(base_name, url, config, console, args.no_subtitles)
         comments_text = process_comments(data, args.comments, args.all_comments)
 
         context = f"""TITLE: {data.get('title')}
