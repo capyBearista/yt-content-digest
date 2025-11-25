@@ -1,0 +1,6 @@
+yt-dlp
+litellm
+pyyaml
+rich
+openai
+faster-whisper
