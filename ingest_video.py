@@ -1,5 +1,7 @@
 import argparse
 import sys
+import time
+import random
 from typing import Optional, Any
 
 def get_parser():
@@ -56,20 +58,46 @@ class Transcriber:
             return "[Error: faster-whisper missing]"
 
         model_size = self.config.get('local_whisper_model', 'base')
-        device = self.config.get('local_whisper_device', 'auto')
-        compute_type = self.config.get('local_whisper_compute_type', 'int8')
-
+        # Force CPU fallback to avoid missing cuDNN issues on systems without cuDNN
+        device = 'cpu'
+        compute_type = self.config.get('local_whisper_compute_type', 'float32')
+ 
         console.print(f"[yellow]Loading faster-whisper model: {model_size} on {device} ({compute_type})...[/yellow]")
+        
+        # Check if the file is a video format and inform user
+        import os
+        file_ext = os.path.splitext(audio_path)[1].lower()
+        if file_ext in ['.webm', '.mp4', '.mkv', '.avi']:
+            console.print(f"[dim]Note: Using video file ({file_ext}) for audio transcription[/dim]")
+        
         try:
             model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            console.print(f"[yellow]Transcribing audio (this may take 1-2 minutes for longer videos)...[/yellow]")
+            
+            # Add progress indication
+            import time
+            start_time = time.time()
             segments, info = model.transcribe(audio_path, beam_size=5)
+            
             console.print(f"[dim]Detected language: {info.language} (probability {info.language_probability:.2f})[/dim]")
+            console.print(f"[yellow]Processing transcription segments...[/yellow]")
+            
             output = []
+            segment_count = 0
             for segment in segments:
                 start = int(segment.start)
                 end = int(segment.end)
                 text = segment.text.strip()
                 output.append(f"[{start}s -> {end}s] {text}")
+                segment_count += 1
+                
+                # Show progress every 50 segments
+                if segment_count % 50 == 0:
+                    elapsed = time.time() - start_time
+                    console.print(f"[dim]Processed {segment_count} segments ({elapsed:.1f}s elapsed)...[/dim]")
+            
+            total_time = time.time() - start_time
+            console.print(f"[green]Transcription completed: {segment_count} segments in {total_time:.1f}s[/green]")
             return "\n".join(output)
         except Exception as e:
             console.print(f"[red]Local transcription failed: {e}[/red]")
@@ -99,13 +127,24 @@ class Transcriber:
             )
         return str(transcription)
 
-def run_yt_dlp(url: str, output_template: str, no_subtitles: bool = False):
+def run_yt_dlp(url: str, output_template: str, no_subtitles: bool = False, console=None, max_retries: int = 3):
+    """Run yt-dlp with robust error handling and retry logic"""
     import subprocess
+    
+    # Base command with enhanced reliability options
     cmd = [
         "yt-dlp",
         "--write-info-json",
         "--write-comments",
+        "--remote-components", "ejs:github",  # Enable JavaScript challenge solving
+        "--retries", "3",
+        "--fragment-retries", "3",
+        "--extractor-retries", "3",
+        "--retry-sleep", "linear=1:5",
+        "--no-check-certificates",  # Avoid SSL issues
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ]
+    
     if not no_subtitles:
         cmd.extend([
             "--write-subs",
@@ -116,27 +155,175 @@ def run_yt_dlp(url: str, output_template: str, no_subtitles: bool = False):
         cmd.extend([
             "--skip-download",
         ])
+    
     cmd.extend([
         "--output", output_template,
         url
     ])
-    subprocess.run(cmd, capture_output=True, check=True)
+    
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            if console and attempt > 0:
+                console.print(f"[yellow]Retry attempt {attempt + 1}/{max_retries}...[/yellow]")
+            
+            # Run with timeout to prevent hanging
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                check=True, 
+                timeout=300,  # 5 minute timeout
+                text=True
+            )
+            return result  # Success
+            
+        except subprocess.TimeoutExpired as e:
+            last_error = f"Command timed out after 5 minutes: {e}"
+            if console:
+                console.print(f"[red]Timeout on attempt {attempt + 1}: {last_error}[/red]")
+                
+        except subprocess.CalledProcessError as e:
+            error_output = e.stderr if e.stderr else e.stdout if e.stdout else "No error output"
+            last_error = f"Command failed with exit code {e.returncode}: {error_output}"
+            
+            if console:
+                console.print(f"[red]Error on attempt {attempt + 1}: {last_error}[/red]")
+            
+            # Check for specific error patterns that might be retryable
+            if any(pattern in error_output.lower() for pattern in [
+                "network", "timeout", "connection", "temporary", "rate limit", 
+                "503", "502", "429", "throttling", "unavailable"
+            ]):
+                if attempt < max_retries - 1:
+                    # Exponential backoff with jitter
+                    sleep_time = (2 ** attempt) + random.uniform(0, 1)
+                    if console:
+                        console.print(f"[yellow]Retryable error detected, sleeping {sleep_time:.1f}s before retry...[/yellow]")
+                    time.sleep(sleep_time)
+                    continue
+            
+            # For non-retryable errors or final attempt, break immediately
+            break
+            
+        except Exception as e:
+            last_error = f"Unexpected error: {e}"
+            if console:
+                console.print(f"[red]Unexpected error on attempt {attempt + 1}: {last_error}[/red]")
+            break
+    
+    # If we get here, all attempts failed
+    raise subprocess.CalledProcessError(
+        1, 
+        cmd, 
+        output=None, 
+        stderr=f"All {max_retries} attempts failed. Last error: {last_error}"
+    )
 
-def download_audio(url: str, output_template: str) -> Optional[str]:
-    import os, subprocess
-    audio_file = f"{output_template}.mp3"
-    if os.path.exists(audio_file):
-        return audio_file
-    cmd = [
+def download_audio(url: str, output_template: str, console=None) -> Optional[str]:
+    import os, subprocess, glob
+    
+    # Look for existing audio/video files first (including webm which can contain audio)
+    audio_extensions = ['*.mp3', '*.m4a', '*.aac', '*.opus', '*.webm', '*.mp4', '*.mkv']
+    for ext in audio_extensions:
+        candidates = glob.glob(f"{output_template}{ext}")
+        if candidates:
+            if console:
+                console.print(f"[green]Found existing media file for transcription: {candidates[0]}[/green]")
+            return candidates[0]
+    
+    # Strategy 1: Try to download audio-only format without conversion
+    if console:
+        console.print("[yellow]Attempting audio-only download (no conversion)...[/yellow]")
+    
+    cmd_audio_only = [
         "yt-dlp",
-        "-x", "--audio-format", "mp3",
-        "--output", output_template,
+        "-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=opus]/bestaudio[ext=aac]/bestaudio",
+        "--remote-components", "ejs:github",
+        "--retries", "3",
+        "--fragment-retries", "3",
+        "--no-check-certificates",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "--output", f"{output_template}.%(ext)s",
         url
     ]
+    
     try:
-        subprocess.run(cmd, capture_output=True, check=True)
-        return audio_file
-    except subprocess.CalledProcessError:
+        result = subprocess.run(
+            cmd_audio_only, 
+            capture_output=True, 
+            check=True, 
+            timeout=600,  # 10 minute timeout
+            text=True
+        )
+        
+        # Find the downloaded audio file
+        for ext in audio_extensions:
+            candidates = glob.glob(f"{output_template}{ext}")
+            if candidates:
+                if console:
+                    console.print(f"[green]Audio downloaded: {candidates[0]}[/green]")
+                return candidates[0]
+                
+    except subprocess.CalledProcessError as e:
+        if console:
+            console.print(f"[yellow]Audio-only download failed, trying video download...[/yellow]")
+    except subprocess.TimeoutExpired:
+        if console:
+            console.print("[red]Audio download timed out[/red]")
+        return None
+    except Exception as e:
+        if console:
+            console.print(f"[yellow]Audio download error: {e}, trying video download...[/yellow]")
+    
+    # Strategy 2: Download video file (which often contains usable audio track)
+    if console:
+        console.print("[yellow]Downloading video file for audio extraction...[/yellow]")
+    
+    cmd_video = [
+        "yt-dlp",
+        "-f", "worst[height<=720]/worst",  # Get smaller video file to save bandwidth
+        "--remote-components", "ejs:github",
+        "--retries", "3",
+        "--fragment-retries", "3",
+        "--no-check-certificates",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "--output", f"{output_template}.%(ext)s",
+        url
+    ]
+    
+    try:
+        result = subprocess.run(
+            cmd_video, 
+            capture_output=True, 
+            check=True, 
+            timeout=600,
+            text=True
+        )
+        
+        # Find the downloaded video file
+        for ext in audio_extensions:
+            candidates = glob.glob(f"{output_template}{ext}")
+            if candidates:
+                if console:
+                    console.print(f"[green]Video file downloaded for transcription: {candidates[0]}[/green]")
+                return candidates[0]
+        
+        if console:
+            console.print("[yellow]No media file found after download[/yellow]")
+        return None
+        
+    except subprocess.TimeoutExpired:
+        if console:
+            console.print("[red]Video download timed out[/red]")
+        return None
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr if e.stderr else str(e)
+        if console:
+            console.print(f"[red]Video download failed: {error_msg}[/red]")
+        return None
+    except Exception as e:
+        if console:
+            console.print(f"[red]Unexpected download error: {e}[/red]")
         return None
 
 def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles: bool = False) -> str:
@@ -150,10 +337,17 @@ def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles
                 return "".join(lines)
 
     console.print("[yellow]Initiating transcription workflow...[/yellow]")
-    audio_path = download_audio(url, base_name)
+    audio_path = download_audio(url, base_name, console)
     if audio_path:
         transcriber = Transcriber(config)
         transcript = transcriber.transcribe(audio_path, console)
+        
+        # Save transcript to file
+        transcript_path = f"{base_name}_transcript.txt"
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            f.write(transcript)
+        console.print(f"[green]Transcript saved to {transcript_path}[/green]")
+
         if os.path.exists(audio_path):
             os.remove(audio_path)
         return transcript
@@ -256,9 +450,9 @@ def main(args):
         console.rule(f"[bold green]Processing {video_id}")
 
         try:
-            run_yt_dlp(url, base_name, args.no_subtitles)
+            run_yt_dlp(url, base_name, args.no_subtitles, console)
         except Exception as e:
-            console.print(f"[red]yt-dlp failed: {e}[/red]")
+            console.print(f"[red]yt-dlp failed after all retries: {e}[/red]")
             continue
 
         json_path = glob.glob(f"{base_name}*.info.json")[0]
@@ -269,9 +463,12 @@ def main(args):
         comments_text = process_comments(data, args.comments, args.all_comments)
 
         context = f"""TITLE: {data.get('title')}
-DESCRIPTION: {data.get('description')}
+DESCRIPTION:
+{data.get('description')}
+
 TRANSCRIPT:
-{transcript[:50000]} ... (truncated if too long)
+{transcript[:50000]}
+... (truncated if too long)
 
 COMMENTS:
 {comments_text}
