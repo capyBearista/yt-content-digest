@@ -4,3 +4,4 @@ pyyaml
 rich
 openai
 faster-whisper
+webvtt-py
