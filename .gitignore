@@ -90,3 +90,5 @@ yarn-error.log*
 *.swo
 *.bak
 *.tmp
+
+config.yaml
