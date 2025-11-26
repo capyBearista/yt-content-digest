@@ -10,6 +10,7 @@ def get_parser():
     parser.add_argument("--comments", type=int, default=100, help="Max comments to parse")
     parser.add_argument("--all-comments", action="store_true", help="Parse ALL comments")
     parser.add_argument("--no-subtitles", action="store_true", help="Skip subtitle download and directly download audio for transcription")
+    parser.add_argument("--save", action="store_true", help="Save all intermediate files (metadata, transcripts, subtitles)")
     return parser
 
 def load_config(config_path="config.yaml"):
@@ -326,7 +327,7 @@ def download_audio(url: str, output_template: str, console=None) -> Optional[str
             console.print(f"[red]Unexpected download error: {e}[/red]")
         return None
 
-def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles: bool = False) -> str:
+def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles: bool = False, save_files: bool = False) -> str:
     import glob, os
     if not no_subtitles:
         vtt_files = glob.glob(f"{base_name}*.vtt")
@@ -336,17 +337,18 @@ def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles
                 lines = [l for l in f.readlines() if "WEBVTT" not in l and l.strip()]
                 return "".join(lines)
 
-    console.print("[yellow]Initiating transcription workflow...[/yellow]")
+    console.print("[yellow]Initiating transcription workflow...")
     audio_path = download_audio(url, base_name, console)
     if audio_path:
         transcriber = Transcriber(config)
         transcript = transcriber.transcribe(audio_path, console)
         
-        # Save transcript to file
-        transcript_path = f"{base_name}_transcript.txt"
-        with open(transcript_path, "w", encoding="utf-8") as f:
-            f.write(transcript)
-        console.print(f"[green]Transcript saved to {transcript_path}[/green]")
+        # Save transcript to file only if save_files is True
+        if save_files:
+            transcript_path = f"{base_name}_transcript.txt"
+            with open(transcript_path, "w", encoding="utf-8") as f:
+                f.write(transcript)
+            console.print(f"[green]Transcript saved to {transcript_path}[/green]")
 
         if os.path.exists(audio_path):
             os.remove(audio_path)
@@ -420,6 +422,35 @@ def generate_summary(context: str, config: dict, console) -> str:
     except Exception as e:
         return f"LLM Error: {str(e)}"
 
+def cleanup_files(base_name: str, save_files: bool, console) -> None:
+    """Clean up intermediate files if save_files is False."""
+    if save_files:
+        return
+    
+    import glob
+    import os
+    
+    # Files to clean up: info.json, .vtt files, transcript files, comment files, and video files
+    patterns = [
+        f"{base_name}*.info.json",
+        f"{base_name}*.vtt", 
+        f"{base_name}_transcript.txt",
+        f"{base_name}*.comments.json",
+        f"{base_name}",  # Video file without extension
+        f"{base_name}.*"  # Any other files with extensions
+    ]
+    
+    for pattern in patterns:
+        files = glob.glob(pattern)
+        for file_path in files:
+            # Don't remove the summary file
+            if file_path.startswith("SUMMARY_"):
+                continue
+            try:
+                os.remove(file_path)
+            except (PermissionError, FileNotFoundError, OSError) as e:
+                console.print(f"[red]Error removing {file_path}: {e}[/red]")
+
 def main(args):
     import os, json, glob
     try:
@@ -459,7 +490,7 @@ def main(args):
         with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        transcript = get_transcript(base_name, url, config, console, args.no_subtitles)
+        transcript = get_transcript(base_name, url, config, console, args.no_subtitles, args.save)
         comments_text = process_comments(data, args.comments, args.all_comments)
 
         context = f"""TITLE: {data.get('title')}
@@ -479,6 +510,9 @@ COMMENTS:
         out_name = f"SUMMARY_{video_id}.md"
         with open(out_name, 'w', encoding='utf-8') as f:
             f.write(summary + "\n\n" + "="*30 + "\nRAW DATA\n" + "="*30 + "\n" + context)
+
+        # Clean up intermediate files if --save flag not provided
+        cleanup_files(base_name, args.save, console)
 
         console.print(f"[bold green]Done! Saved to {out_name}[/bold green]")
 
