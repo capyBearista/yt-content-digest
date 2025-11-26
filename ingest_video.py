@@ -1,3 +1,11 @@
+"""
+Video Summarizer - YouTube video analysis tool
+
+This tool downloads YouTube metadata, subtitles, and generates AI summaries.
+VTT subtitle files are automatically converted to clean timestamp format 
+with millisecond precision ([Xs.XXXs -> Ys.YYYs] Text) for consistency
+with faster-whisper transcription output.
+"""
 import argparse
 import sys
 import time
@@ -327,15 +335,149 @@ def download_audio(url: str, output_template: str, console=None) -> Optional[str
             console.print(f"[red]Unexpected download error: {e}[/red]")
         return None
 
+def convert_vtt_to_clean_format(vtt_file_path: str, console) -> str:
+    """
+    Convert VTT subtitle file to clean transcript format with millisecond precision.
+    Handles YouTube's overlapping/incremental captions by deduplicating and merging.
+    
+    Args:
+        vtt_file_path: Path to the VTT file
+        console: Rich console for output
+        
+    Returns:
+        Formatted transcript string in the format '[Xs.XXXs -> Ys.YYYs] Text content'
+        
+    Raises:
+        Exception: If VTT parsing fails, allowing fallback to audio transcription
+    """
+    try:
+        import webvtt
+    except ImportError as e:
+        raise Exception(f"webvtt-py library not available: {e}")
+    
+    try:
+        # Parse the VTT file
+        captions = webvtt.read(vtt_file_path)
+        if not captions:
+            raise Exception("No captions found in VTT file")
+        
+        # Process captions to handle YouTube's overlapping/incremental text
+        processed_segments = []
+        
+        for caption in captions:
+            start_seconds = caption.start_in_seconds
+            end_seconds = caption.end_in_seconds
+            
+            # Clean the text content (remove VTT markup, normalize whitespace)
+            text = caption.text.strip()
+            text = ' '.join(text.split())  # Normalize whitespace
+            
+            if text and (end_seconds - start_seconds) > 0.1:  # Filter very short segments
+                processed_segments.append({
+                    'start': start_seconds,
+                    'end': end_seconds,
+                    'text': text
+                })
+        
+        if not processed_segments:
+            raise Exception("No valid captions after filtering")
+        
+        # Deduplicate and merge overlapping segments
+        merged_segments = _merge_overlapping_captions(processed_segments, console)
+        
+        # Convert to final format
+        transcript_lines = []
+        for segment in merged_segments:
+            timestamp = f"[{segment['start']:.3f}s -> {segment['end']:.3f}s]"
+            transcript_lines.append(f"{timestamp} {segment['text']}")
+        
+        if not transcript_lines:
+            raise Exception("No valid transcript lines after processing")
+            
+        return '\n'.join(transcript_lines)
+        
+    except Exception as e:
+        console.print(f"[yellow]VTT parsing failed: {e}[/yellow]")
+        raise Exception(f"VTT conversion failed: {e}")
+
+def _merge_overlapping_captions(segments: list, console) -> list:
+    """
+    Merge overlapping captions and deduplicate content from YouTube VTT files.
+    YouTube often creates incremental captions with heavy text overlap between consecutive segments.
+    """
+    if not segments:
+        return []
+    
+    merged = []
+    
+    for i, current in enumerate(segments):
+        if i == 0:
+            # First segment becomes the base
+            merged.append(current.copy())
+            continue
+            
+        # Check for text overlap with the previous merged segment
+        prev_merged = merged[-1]
+        current_words = current['text'].split()
+        prev_words = prev_merged['text'].split()
+        
+        # Find overlap between end of previous and start of current
+        best_overlap = 0
+        overlap_start = 0
+        
+        # Look for the longest overlap at the boundary
+        for j in range(1, min(len(prev_words), len(current_words)) + 1):
+            prev_suffix = prev_words[-j:]
+            current_prefix = current_words[:j]
+            
+            if prev_suffix == current_prefix:
+                best_overlap = j
+                overlap_start = j
+        
+        if best_overlap > 0:
+            # Remove overlapping text from current segment
+            unique_words = current_words[best_overlap:]
+            if unique_words:  # Only add if there's unique content
+                unique_text = ' '.join(unique_words)
+                merged.append({
+                    'start': current['start'],
+                    'end': current['end'],
+                    'text': unique_text
+                })
+            else:
+                # Current segment is entirely contained in previous, extend the time
+                merged[-1]['end'] = current['end']
+        else:
+            # No overlap, add as new segment
+            merged.append(current.copy())
+    
+    # Filter out very short or empty segments
+    final_merged = []
+    for segment in merged:
+        text = segment['text'].strip()
+        duration = segment['end'] - segment['start']
+        
+        if text and duration > 0.5:  # Must have text and be at least 0.5s
+            final_merged.append(segment)
+    
+    console.print(f"[blue]Processed {len(segments)} captions into {len(final_merged)} clean segments[/blue]")
+    return final_merged
+
 def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles: bool = False, save_files: bool = False) -> str:
     import glob, os
     if not no_subtitles:
         vtt_files = glob.glob(f"{base_name}*.vtt")
         if vtt_files:
             console.print(f"[green]Subtitle file found: {os.path.basename(vtt_files[0])}[/green]")
-            with open(vtt_files[0], 'r', encoding='utf-8') as f:
-                lines = [l for l in f.readlines() if "WEBVTT" not in l and l.strip()]
-                return "".join(lines)
+            try:
+                # Use VTT converter for clean formatting with millisecond precision
+                transcript = convert_vtt_to_clean_format(vtt_files[0], console)
+                console.print("[green]VTT file successfully converted to clean format[/green]")
+                return transcript
+            except Exception as e:
+                # Fallback to audio transcription if VTT conversion fails
+                console.print(f"[yellow]VTT processing failed, falling back to audio transcription: {e}[/yellow]")
+                # Continue to audio transcription workflow below
 
     console.print("[yellow]Initiating transcription workflow...")
     audio_path = download_audio(url, base_name, console)
