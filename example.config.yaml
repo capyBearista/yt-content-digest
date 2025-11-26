@@ -1,0 +1,70 @@
+# ==========================================
+# LLM SETTINGS
+# ==========================================
+# Configure which LLM to use for generating the summary.
+# The script uses LiteLLM, so it supports 100+ providers.
+# Just uncomment the block for the provider you want to use.
+
+# --- OPTION 1: OLLAMA (Local, Free) ---
+# llm_provider: "ollama"
+# llm_model: "llama3.2:3b"
+# URL where Ollama is running. Use "http://host.docker.internal:11434" if running via Docker.
+ollama_base_url: "http://localhost:11434"
+
+# --- OPTION 2: OPENAI ---
+# llm_provider: "openai"
+# llm_model: "gpt-4o"
+
+# --- OPTION 3: ANTHROPIC (CLAUDE) ---
+# llm_provider: "anthropic"
+# llm_model: "claude-3-5-sonnet-20240620"
+
+# --- OPTION 4: GOOGLE GEMINI ---
+# llm_provider: "gemini"
+# llm_model: "gemini-1.5-pro"
+
+# --- OPTION 5: OPENROUTER (Access to huge variety of models) ---
+# llm_provider: "openrouter"
+# llm_model: "x-ai/grok-4.1-fast:free"
+
+# --- OPTION 6: GROQ (Extremely fast inference) ---
+# llm_provider: "groq"
+# llm_model: "llama-3.1-70b-versatile"
+
+
+# ==========================================
+# TRANSCRIPTION SETTINGS
+# ==========================================
+# Options: 
+#   - "local" (Uses faster-whisper on your machine. FREE + PRIVATE.)
+#   - "openai" (Uses OpenAI API. PAID, high ACCURACY.)
+#   - "groq"   (Uses Groq API. PAID, high SPEED.)
+transcription_provider: "local"
+
+# [Local Only] Settings for faster-whisper
+# Models: tiny, base, small, medium, large-v3
+local_whisper_model: "base"
+# Device: "auto", "cpu", "cuda" (use "cuda" if you have an NVIDIA GPU)
+local_whisper_device: "auto"
+# Compute Type: "int8" (best for CPU), "float16" (best for GPU)
+local_whisper_compute_type: "int8"
+
+
+# ==========================================
+# API KEYS
+# ==========================================
+# Optional, leave blank if not using.
+api_keys:
+  OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  GEMINI_API_KEY: ""
+  OPENROUTER_API_KEY: ""
+  GROQ_API_KEY: ""
+
+
+# ==========================================
+# GENERAL SETTINGS
+# ==========================================
+# If a YouTube video does not have captions, should we download the audio
+# and transcribe it using the method selected above?
+download_audio_if_missing_subs: true
