@@ -1,0 +1,8 @@
+- [ ] Confirm recent changes to `ingest_video.py` (the NOT-Groq related changes)
+- [ ] Add SUMMARY ignore line
+- [ ] Make sure Qroq transcription method works (test again)
+- [ ] Preserve summary format (like example from x-ai/grok-4.1-fast:free) via prompting
+- [ ] Make sure longer videos have longer summaries
+  - May have to introduce different prompt if transcript or audio is longer
+- [ ] Look into and integrate YouTube API if applicable
+  - Need to check benefits of using API
