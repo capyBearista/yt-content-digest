@@ -68,3 +68,14 @@ api_keys:
 # If a YouTube video does not have captions, should we download the audio
 # and transcribe it using the method selected above?
 download_audio_if_missing_subs: true
+
+# ==========================================
+# YOUTUBE ANTI-DETECTION (Advanced)
+# ==========================================
+# The script automatically tries to use browser cookies to avoid bot detection.
+# If you encounter "Sign in to confirm you're not a bot" errors:
+#   1. Run: python test_cookies.py (to check browser cookie extraction)
+#   2. Use: python ingest_video.py urls.txt --delay (for extra rate limiting)
+#   3. Or manually export cookies to "cookies.txt" in this folder
+#
+# For more help: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
