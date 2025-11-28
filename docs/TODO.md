@@ -1,6 +1,6 @@
 - [X] Remove `download_audio_if_mis if sing_subs` config line
 - [ ] Confirm recent changes to `ingest_video.py` (the NOT-Groq related changes)
-- [ ] Add SUMMARY ignore line
+- [X] Add SUMMARY ignore line
 - [ ] Make sure Qroq transcription method works (test again)
 - [ ] Remove transcription/summarization provider and model defaults (show error if not defined in config)
 - [ ] Test multiple URLs input
