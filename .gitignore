@@ -92,3 +92,6 @@ yarn-error.log*
 *.tmp
 
 config.yaml
+*.vtt
+SUMMARY_*.md
+!SUMMARY_example.md
