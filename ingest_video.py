@@ -21,6 +21,43 @@ def get_parser():
     parser.add_argument("--save", action="store_true", help="Save all intermediate files (metadata, transcripts, subtitles)")
     return parser
 
+def validate_config(config: dict) -> None:
+    """Validate configuration and check API key availability for configured providers"""
+    import os
+    
+    # Validate required fields
+    required_fields = ['transcription_provider', 'llm_provider', 'llm_model']
+    for field in required_fields:
+        if field not in config:
+            raise ValueError(f"{field} must be specified in config.yaml")
+    
+    transcription_provider = config['transcription_provider'].lower()
+    llm_provider = config['llm_provider'].lower()
+    
+    # Validate transcription provider specific config
+    if transcription_provider == 'local':
+        if 'local_whisper_model' not in config:
+            raise ValueError("local_whisper_model must be specified when using local transcription")
+        if 'local_whisper_compute_type' not in config:
+            raise ValueError("local_whisper_compute_type must be specified when using local transcription")
+    elif transcription_provider in ['openai', 'groq']:
+        api_key = os.environ.get(f"{transcription_provider.upper()}_API_KEY")
+        if not api_key:
+            raise ValueError(f"{transcription_provider.upper()}_API_KEY must be provided in config.yaml api_keys section")
+    else:
+        raise ValueError(f"Unknown transcription provider: {transcription_provider}. Supported: local, openai, groq")
+    
+    # Validate LLM provider specific config
+    if llm_provider == 'ollama':
+        if 'ollama_base_url' not in config:
+            raise ValueError("ollama_base_url must be specified when using ollama provider")
+    elif llm_provider in ['openai', 'anthropic', 'openrouter', 'groq', 'gemini']:
+        api_key = os.environ.get(f"{llm_provider.upper()}_API_KEY")
+        if not api_key:
+            raise ValueError(f"{llm_provider.upper()}_API_KEY must be provided in config.yaml api_keys section")
+    else:
+        pass
+
 def load_config(config_path="config.yaml"):
     import os
     try:
@@ -39,14 +76,21 @@ def load_config(config_path="config.yaml"):
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
+    # Load API keys into environment
     for key, value in config.get('api_keys', {}).items():
         if value:
             os.environ[key] = value
+    
+    # Validate configuration
+    validate_config(config)
+    
     return config
 
 class Transcriber:
     def __init__(self, config):
-        self.provider = config.get('transcription_provider', 'local').lower()
+        if 'transcription_provider' not in config:
+            raise ValueError("transcription_provider must be specified in config.yaml")
+        self.provider = config['transcription_provider'].lower()
         self.config = config
 
     def transcribe(self, audio_path: str, console) -> str:
@@ -66,10 +110,15 @@ class Transcriber:
             console.print(f"[red]faster-whisper not available: {e}[/red]")
             return "[Error: faster-whisper missing]"
 
-        model_size = self.config.get('local_whisper_model', 'base')
+        if 'local_whisper_model' not in self.config:
+            raise ValueError("local_whisper_model must be specified in config.yaml when using local transcription")
+        if 'local_whisper_compute_type' not in self.config:
+            raise ValueError("local_whisper_compute_type must be specified in config.yaml when using local transcription")
+        
+        model_size = self.config['local_whisper_model']
         # Force CPU fallback to avoid missing cuDNN issues on systems without cuDNN
         device = 'cpu'
-        compute_type = self.config.get('local_whisper_compute_type', 'float32')
+        compute_type = self.config['local_whisper_compute_type']
  
         console.print(f"[yellow]Loading faster-whisper model: {model_size} on {device} ({compute_type})...[/yellow]")
         
@@ -120,6 +169,7 @@ class Transcriber:
             return "[Error: openai SDK missing]"
 
         import os
+        import time
         api_key = os.environ.get(f"{self.provider.upper()}_API_KEY")
         if not api_key:
             console.print(f"[red]Error: {self.provider.upper()}_API_KEY is missing in config.[/red]")
@@ -131,17 +181,63 @@ class Transcriber:
         else:
             resp_format = "vtt"
 
-        # OpenAI client accepts None for base_url in many SDKs; pass through safely
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        # OpenAI client
+        client = OpenAI(
+            api_key=api_key, 
+            base_url=base_url
+        )
+        
         base_label = base_url or "https://api.openai.com/v1"
-        console.print(f"[yellow]Sending audio to {self.provider.upper()} API...[/yellow]")
+        console.print(f"[yellow]Sending audio to {self.provider.upper()} API (this will take several minutes for longer videos)...[/yellow]")
         console.print(f"[dim]Transcription request &#45;> provider={self.provider}, base_url={base_label}, model={model}, response_format={resp_format}[/dim]")
-        with open(audio_path, "rb") as file:
-            transcription = client.audio.transcriptions.create(
-                model=model,
-                file=file,
-                response_format=resp_format
-            )
+        
+        # Retry logic with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    console.print(f"[yellow]Retry attempt {attempt + 1}/{max_retries}...[/yellow]")
+                
+                with open(audio_path, "rb") as file:
+                    start_time = time.time()
+                    transcription = client.audio.transcriptions.create(
+                        model=model,
+                        file=file,
+                        response_format=resp_format
+                    )
+                    
+                elapsed_time = time.time() - start_time
+                console.print(f"[green]Transcription completed in {elapsed_time:.1f}s[/green]")
+                break  # Success, exit retry loop
+                
+            except Exception as e:
+                error_type = type(e).__name__
+                error_msg = str(e)
+                
+                # Check if this is a retryable error
+                retryable_errors = [
+                    "timeout", "timeouterror", "apiconnectionerror", "apitimeouterror",
+                    "serviceunavailableerror", "ratelimiterror", "502", "503", "504", "429"
+                ]
+                
+                is_retryable = any(err in error_msg.lower() or err in error_type.lower() for err in retryable_errors)
+                
+                if is_retryable and attempt < max_retries - 1:
+                    # Exponential backoff with jitter
+                    sleep_time = (2 ** attempt) + time.time() % 1  # Add jitter
+                    console.print(f"[yellow]Retryable error ({error_type}): {error_msg}[/yellow]")
+                    console.print(f"[yellow]Waiting {sleep_time:.1f}s before retry...[/yellow]")
+                    time.sleep(sleep_time)
+                    continue
+                else:
+                    # Non-retryable error or final attempt
+                    console.print(f"[red]Transcription API failed ({error_type}): {error_msg}[/red]")
+                    if attempt == max_retries - 1:
+                        console.print(f"[red]All {max_retries} attempts failed[/red]")
+                    return f"[Error: API transcription failed - {error_type}]"
+        else:
+            # This should not happen due to the break statement, but just in case
+            return "[Error: Transcription failed after all retries]"
 
         # Debug response type and keys (non-fatal)
         try:
@@ -567,10 +663,17 @@ def process_comments(data: dict, limit: int, fetch_all: bool) -> str:
     return "\n".join(out)
 
 def generate_summary(context: str, config: dict, console) -> str:
-    provider = config.get('llm_provider', 'ollama')
-    model = config.get('llm_model', 'llama3')
-    custom_api_base = config.get('ollama_base_url', "http://localhost:11434")
+    if 'llm_provider' not in config:
+        raise ValueError("llm_provider must be specified in config.yaml")
+    if 'llm_model' not in config:
+        raise ValueError("llm_model must be specified in config.yaml")
+    
+    provider = config['llm_provider']
+    model = config['llm_model']
+    custom_api_base = config.get('ollama_base_url')
     if provider == "ollama":
+        if not custom_api_base:
+            raise ValueError("ollama_base_url must be specified in config.yaml when using ollama provider")
         model_id = f"ollama/{model}"
         api_base = custom_api_base
     else:

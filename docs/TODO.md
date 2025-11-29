@@ -1,7 +1,7 @@
 - [X] Remove `download_audio_if_mis if sing_subs` config line
 - [X] Add SUMMARY ignore line
 - [X] Make sure Groq transcription method works (test again)
-- [ ] Remove transcription/summarization provider and model defaults (show error if not defined in config)
+- [X] Remove transcription/summarization provider and model defaults (show error if not defined in config)
 - [ ] Test multiple URLs input
   - [ ] Confirm SUMMARY files output format (should be one for each video)
   - [ ] Confirm terminal output (each video should be cleanly separated)
@@ -17,13 +17,13 @@
 ---
 
 Future
-- Make use of `rich` library?
+- Make use of `rich` library (other features)?
 
 ---
 
 Tested Transcription Providers
-- [ ] Local (Ollama)
-- [ ] Qroq
+- [X] Local (faster-whisper)
+- [X] Groq
 - [X] OpenAI
 
 Tested Summarization Providers
