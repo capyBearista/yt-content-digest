@@ -95,3 +95,4 @@ config.yaml
 *.vtt
 SUMMARY_*.md
 !SUMMARY_example.md
+.python-version
