@@ -118,23 +118,77 @@ class Transcriber:
         except Exception as e:
             console.print(f"[red]openai SDK not available: {e}[/red]")
             return "[Error: openai SDK missing]"
-    
+
         import os
         api_key = os.environ.get(f"{self.provider.upper()}_API_KEY")
         if not api_key:
             console.print(f"[red]Error: {self.provider.upper()}_API_KEY is missing in config.[/red]")
             return "[Error: Missing API Key]"
-    
+
+        # Choose response_format per provider (Groq does not support 'vtt')
+        if self.provider == "groq":
+            resp_format = "verbose_json"
+        else:
+            resp_format = "vtt"
+
         # OpenAI client accepts None for base_url in many SDKs; pass through safely
         client = OpenAI(api_key=api_key, base_url=base_url)
+        base_label = base_url or "https://api.openai.com/v1"
         console.print(f"[yellow]Sending audio to {self.provider.upper()} API...[/yellow]")
+        console.print(f"[dim]Transcription request &#45;> provider={self.provider}, base_url={base_label}, model={model}, response_format={resp_format}[/dim]")
         with open(audio_path, "rb") as file:
             transcription = client.audio.transcriptions.create(
                 model=model,
                 file=file,
-                response_format="vtt"
+                response_format=resp_format
             )
-        return str(transcription)
+
+        # Debug response type and keys (non-fatal)
+        try:
+            t_type = type(transcription).__name__
+            preview_keys = list(transcription.keys())[:5] if isinstance(transcription, dict) else []
+            console.print(f"[dim]Transcription response type={t_type}, keys={preview_keys}[/dim]")
+        except Exception:
+            pass
+
+        # Normalize output to plain text for downstream
+        if self.provider == "groq":
+            # verbose_json expected => build timestamped lines from segments
+            try:
+                segments = getattr(transcription, "segments", None)
+                if segments is None and isinstance(transcription, dict):
+                    segments = transcription.get("segments")
+                if isinstance(segments, list) and len(segments) > 0:
+                    lines = []
+                    for seg in segments:
+                        if isinstance(seg, dict):
+                            s = seg.get("start")
+                            e = seg.get("end")
+                            txt = (seg.get("text") or "").strip()
+                        else:
+                            s = getattr(seg, "start", None)
+                            e = getattr(seg, "end", None)
+                            txt = str(getattr(seg, "text", "")).strip()
+                        if txt:
+                            if isinstance(s, (int, float)) and isinstance(e, (int, float)):
+                                lines.append(f"[{float(s):.3f}s -> {float(e):.3f}s] {txt}")
+                            else:
+                                # If start/end not provided, at least include raw text
+                                lines.append(txt)
+                    if lines:
+                        return "\n".join(lines)
+                # Fallback to plain text field
+                text = getattr(transcription, "text", None)
+                if not text and isinstance(transcription, dict):
+                    text = transcription.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text
+            except Exception:
+                pass
+            # Final fallback: stringify entire response
+            return str(transcription)
+        else:
+            return str(transcription)
 
 def run_yt_dlp(url: str, output_template: str, no_subtitles: bool = False, console=None, max_retries: int = 3):
     """Run yt-dlp with robust error handling and retry logic"""
