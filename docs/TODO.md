@@ -2,17 +2,22 @@
 - [X] Add SUMMARY ignore line
 - [X] Make sure Groq transcription method works (test again)
 - [X] Remove transcription/summarization provider and model defaults (show error if not defined in config)
-- [ ] Test multiple URLs input
-  - [ ] Confirm SUMMARY files output format (should be one for each video)
-  - [ ] Confirm terminal output (each video should be cleanly separated)
-- [ ] Test transcription providers
-- [ ] Test summarization providers
-- [ ] Look into other transcription providers, add them
+- [X] Test multiple URLs input
+  - [X] Confirm SUMMARY files output format (should be one for each video)
+  - [X] Confirm terminal output (each video should be cleanly separated)
+- [X] Test transcription providers
+- [X] Test summarization providers
+- [ ] ~~Clean links added to input file (remove timestamps, extra text, tracking text)~~ Not required as yt-dlp seems to already have robust link handling
 - [ ] Preserve summary format (like example from x-ai/grok-4.1-fast:free) via prompting
 - [ ] Make sure longer videos have longer summaries
   - May have to introduce different prompt if transcript or audio is longer
 - [ ] Look into and integrate YouTube API if applicable
   - Need to check benefits of using API
+- [ ] Look into other summarization providers to add
+  - [ ] Cerebras
+  - [ ] DeepSeek
+- [ ] Look into other transcription providers to add
+  - [ ] Cerebras
 
 ---
 
@@ -27,9 +32,8 @@ Tested Transcription Providers
 - [X] OpenAI
 
 Tested Summarization Providers
-- [ ] Local (Ollama)
-- [ ] OpenAI
-- [ ] Anthropic
-- [ ] Gemini
+- [X] Local (Ollama)
+- [X] OpenAI
+- [X] Gemini
 - [X] OpenRouter
-- [ ] Groq
+- [X] Groq
