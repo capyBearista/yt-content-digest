@@ -1,45 +1,36 @@
 ### Video Content Summary
-The video is a sponsored first-impressions review of **Zed IDE** by a developer transitioning from years of Emacs use, a brief Cursor trial, and interest in Antigravity. Despite the sponsorship, the reviewer delivers candid opinions, praising Zed's speed while critiquing its Pro tier. Key journey: Emacs felt imperfect; Cursor led AI but was resource-heavy; Zed surprised with a unique agentic approach. The review demos interface, performance, AI, Vim mode, collab features, and backstory, concluding Zed is "crazy fast" and worth adopting (planning to cancel Cursor sub), though Antigravity shows promise.
-
-Main sections:
-- **Performance/UI**: "Instantaneous" tab switching at 120 FPS; Rust-based for speed/stability; ditched early Electron roots (founder Nathan Sobo from Atom/GitHub) for custom Rust UI framework (GPUI). Feels less stressful than VS Code/Cursor due to no sub-perceptual lags.
-- **Core Features**: Vim/Helix modes (with relative numbers, surround motions; missing advanced like Flash.nvim); fast extensions/themes; VS Code-like keybinds (Cmd-P fuzzy finder); AI master switch.
-- **AI/Agentic Coding**: ACP (Agent Communication Protocol) standardizes external agents (Claude Code, OpenCode, Gemini, Codex); supports OpenAI-compatible providers (e.g., Cerebras for ultra-fast inference, Ollama local). Inline predictions (Zed/Copilot/Codeium). Internal agent flexible but external smoother.
-- **Zed Pro ($10/mo)**: Frontier models + unlimited predictions (free tier caps at ~$2k tokens, includes $5/mo); criticized as meh value (10% markup on excess tokens, better to BYO API keys).
-- **Collab**: Real-time multiplayer editing/channels/voice; powerful for teams but prank-prone.
-- **Conclusion**: Positive experience; free/open-source; check it out.
+This video presents a first-impressions review of the Zed code editor from the perspective of a developer with a background in Emacs and recent experience with Cursor. The creator notes the sponsorship but asserts it will not influence their opinions. The review covers Zed's core philosophy of performance, demonstrated by its 120 FPS UI and Rust-based architecture, which the creator argues results in a noticeably faster experience than Electron-based alternatives like VS Code and Cursor. A significant portion is dedicated to Zed’s approach to AI-assisted coding, specifically its Agent Communication Protocol (ACP), which allows integration with external AI agents like Claude Code and Open Code, offering flexibility over locked-in solutions. The creator also explores features like Vim/Helix modes, extension installation speed, and real-time collaboration, while offering a critical analysis of the Zed Pro subscription model. The narrative concludes with the creator's intent to switch from Cursor to Zed, citing its speed, open-source nature, and flexible AI integrations as key advantages, despite some reservations about the Pro tier.
 
 ### Key Insights
-- **Zed's Philosophy**: Hyper-focus on performance (Rust, no Electron bloat) over feature parity with VS Code; enables "telekinetic" feel. ACP promotes ecosystem openness, avoiding Cursor's lock-in (valued at $29B partly for proprietary agent).
-- **AI Strategy**: Agnostic—use your subs (e.g., Claude Pro) without Zed taking cut; future-proofs via standards. Cerebras inference "ridiculously fast" (not sped up in demo).
-- **Trade-offs**: Excels for speed/agentic flow but lacks some Vim depth, full debugging/LSP (e.g., Rust hangs), unsaved restore quirks. Ideal for GUI lovers ditching terminals; not Emacs/Vim replacement.
-- **Business Angle**: Free core + optional Pro; collab positions as team tool (used in Zed meetings per HN).
-- **Reviewer Stance**: Zed > Cursor now; monitors Antigravity; Emacs nostalgia lingers.
+- **Performance as a Core Tenet** (Time: 01:10): The creator argues that Zed's dedication to optimal performance, including a 120 FPS UI and a custom Rust-based framework, makes it feel "instantaneous" and significantly faster than Electron-based editors like VS Code.
+- **Flexible AI Integration via ACP** (Time: 03:32): The reviewer highlights Zed's Agent Communication Protocol (ACP) as a major differentiator, which allows users to integrate various external AI agents (e.g., Claude Code, Open Code) using existing subscriptions, contrasting it with Cursor's closed, proprietary agent model.
+- **Critical View of Zed Pro** (Time: 05:37): The creator expresses a negative opinion of the Zed Pro subscription, questioning its value proposition due to a 10% markup on token costs beyond the included $5 monthly credit and the capped AI predictions in the free tier.
 
-### Technical Details
-| Aspect | Details |
-|--------|---------|
-| **Tech Stack** | Rust core; GPUI (custom Rust UI lib, open-source); early Electron abandoned for perf. |
-| **Performance** | 120 FPS tabs; low RAM/CPU; "instant" vs. VS Code/Cursor; fast ext installs. |
-| **Modes/Keybinds** | Vim (surround, relative nums; Cmd-Shift-P palette, Cmd-P fuzzy); Helix mode. |
-| **AI Integration** | ACP (industry-adopted: Claude/OpenCode/Gemini); predictions (tab-accept); BYO OpenAI (Cerebras/Ollama); internal agent or external. |
-| **Pricing** | Free tier: $5 tokens/mo, $2k pred cap; Pro: $10/mo unlimited preds + models (10% token premium post-$5). |
-| **Other** | Themes (Grubbox/OneDark); collab (multi-user RT edit/voice); UTF-8 only (limitation noted in comments). |
+### Detailed Breakdown
+| Feature / Aspect | Details / Verdict |
+|---|---|
+| **Performance & Architecture** | Built in Rust on a custom UI framework for maximum speed and low resource usage; creator claims it feels faster than VS Code/Cursor. |
+| **AI & Coding Assistance** | Supports ACP for external agents (Claude Code, Open Code) and an internal agent for OpenAI-compatible providers; AI edit predictions are on par with Copilot. |
+| **Editor Features** | Includes Vim mode with surround motions and Helix mode; supports common VS Code keybindings; fast extension installation. |
+| **Collaboration (Collabs)** | Real-time multi-user editing with project sharing, channels, and voice chat, noted as a powerful feature for teams. |
+| **Pricing Model** | Free tier is capable; Zed Pro subscription ($10/month) offers Frontier models and unlimited predictions, but creator deems it underwhelming due to token pricing structure. |
 
-### Community Sentiment
-**Overall**: **Highly positive (80-90% of top comments)**—praised as "goated," addictive ("can't go back"), fastest/low-RAM alternative to VS Code/Cursor. 153+ likes on RAM efficiency; love for simplicity, AI disable, ACP, combos (Zed + Claude/Convex/OpenCode). Many switched from Sublime/Emacs/Vim; excitement for Rust GUI, fast models.
+### Community Intelligence
+**Overall**: The sentiment is overwhelmingly Positive, with widespread praise for Zed's speed and efficiency. A minority of comments express strong preferences for terminal-based editors (Neovim, Helix) or highlight specific missing features.
 
-**Positive Highlights** (Top themes, likes):
-- Speed/efficiency (153, 83, 61 likes): "Ultra fast, no RAM eater"; "unbelievable faster than VS Code."
-- Simplicity/AI flexibility (48, 40, 25): "Less distractions"; disable AI; "Zed + Claude Code + Convex = GOATED."
-- Vim/Helix modes, extensibility (17, 12): "Closest to Neovim OOB"; fast updates.
+**Positive Highlights**:
+- **Performance & Efficiency**: Multiple users praise Zed for being "unbelievably faster" and using significantly less RAM than VS Code. (approx 206+ likes)
+- **Simplicity & Design**: Users appreciate its uncluttered interface and the feeling of being a "joy to use." (approx 103 likes)
+- **AI Flexibility**: The ability to disable AI entirely or use external agents via ACP is highlighted as a major benefit. (approx 103 likes)
 
-**Criticisms/Negatives** (Niche, lower likes; ~10-20%):
-- Terminal purists (10, 8, 7 likes): Prefer Neovim/Helix ("weight lifted returning"); missing full kb-nav, unsaved restore (debated—some say it's optional).
-- Missing features (7, 8 likes): UTF-8 only (no ISO-8859-1/binaries); weak debugging/LSP (Rust hangs, Java/IntelliJ parity lacking); few exts/VS Code icons.
-- Other: Pro pricing (+10% tokens, 3 likes); no 120Hz needed? (3); bloat creeping (2); Windows perf flat (3).
+**Criticisms/Negatives**:
+- **Keyboard-Centric Workflows**: Some users, particularly from Neovim/Helix backgrounds, criticize that not all UI elements are keyboard-controllable, forcing mouse use. (approx 15 likes)
+- **Missing Features**: Comments note the lack of certain features like robust unsaved file restoration (disputed by another user), limited VCS integration, and difficulty with Rust debugging. (approx 8-15 likes)
 
-**Neutral/Mixed**: Emacs/Vim loyalists intrigued but sticky (6, 3); collab LSP slowdowns (1); sponsorship skepticism (5). Cerebras speed hyped (3). Sentiment skews pro-Zed for modern GUI/agentic work; terminal fans unmoved. Engagement high on perf/AI stacks.
+**Community Knowledge (Corrections, Disputes, & Tips)**
+- **[Dispute/Clarification]**: User @panstromek disputes the claim that Zed does not restore unsaved buffers, stating they have "tens of unsaved files perma-opened" that are restored after a restart.
+- **[Additive Tip]**: User @hohohomeboy suggests that while ACP is fantastic, the system prompts from "Kilo Code" are better, though custom profiles can be set up in Zed.
+- **[Technical Clarification]**: User @ghuxi provides a detailed correction regarding file encoding, explaining that Zed rejects non-UTF-8 files (like ISO-8859-1 or UTF-16), which is a known limitation and the subject of GitHub issues.
 
 ==============================
 RAW DATA
