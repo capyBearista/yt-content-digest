@@ -1,5 +1,5 @@
 yt-dlp
-litellm
+litellm==1.80.5
 pyyaml
 rich
 openai
