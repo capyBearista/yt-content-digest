@@ -56,7 +56,7 @@ def validate_config(config: dict) -> None:
     if llm_provider == 'ollama':
         if 'ollama_base_url' not in config:
             raise ValueError("ollama_base_url must be specified when using ollama provider")
-    elif llm_provider in ['openai', 'anthropic', 'openrouter', 'groq', 'gemini']:
+    elif llm_provider in ['openai', 'anthropic', 'openrouter', 'groq', 'gemini', 'cerebras']:
         api_key = os.environ.get(f"{llm_provider.upper()}_API_KEY")
         if not api_key:
             raise ValueError(f"{llm_provider.upper()}_API_KEY must be provided in config.yaml api_keys section")

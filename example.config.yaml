@@ -20,16 +20,16 @@ ollama_base_url: "http://localhost:11434"
 # llm_model: "gemini-2.5-pro"
 
 # --- OPTION 4: OPENROUTER (Access to huge variety of models) ---
-llm_provider: "openrouter"
-llm_model: "x-ai/grok-4.1-fast:free"
+# llm_provider: "openrouter"
+# llm_model: "openai/gpt-oss-20b:free"
 
 # --- OPTION 5: GROQ (Extremely fast inference) ---
 # llm_provider: "groq"
 # llm_model: "openai/gpt-oss-120b"
 
-# -- OPTION 6: CEREBRAS --- (NOT IMPLEMENTED YET)
-# llm_provider: "cerebras"
-# llm_model: "cerebras/Cerebras-GPT-13B"
+# -- OPTION 6: CEREBRAS ---
+llm_provider: "cerebras"
+llm_model: "gpt-oss-120b"
 
 
 # ==========================================
@@ -55,9 +55,8 @@ local_whisper_compute_type: "int8"
 # ==========================================
 # Optional, you can leave blank if not using.
 api_keys:
-  OPENAI_API_KEY: ""
-  ANTHROPIC_API_KEY: ""
-  GEMINI_API_KEY: ""
-  OPENROUTER_API_KEY: ""
-  GROQ_API_KEY: ""
-  CEREBRAS_API_KEY: ""
+  CEREBRAS_API_KEY: "..."
+  GEMINI_API_KEY: "..."
+  GROQ_API_KEY: "..."
+  OPENAI_API_KEY: "..."
+  OPENROUTER_API_KEY: "..."

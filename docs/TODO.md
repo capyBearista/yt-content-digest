@@ -12,13 +12,13 @@
 - [X] Add direct URL input option (in addition to file input)
 - [ ] Make sure longer videos have longer summaries
   - May have to introduce different prompt if transcript or audio is longer
-- [ ] Look into and integrate YouTube API if applicable
-  - Need to check benefits of using API
-- [ ] Look into other summarization providers to add
-  - [ ] Cerebras
-  - [ ] DeepSeek
-- [ ] Look into other transcription providers to add
-  - [ ] Cerebras
+- [ ] ~~Look into and integrate YouTube API if applicable~~
+  - ~~Need to check benefits of using API~~ Not useful, requires a lot of setup for little benefit
+- [X] Look into other summarization providers to add
+  - [X] Cerebras
+  - [ ] ~~DeepSeek~~ no free tier
+- [X] Look into other transcription providers to add
+  - [ ] ~~Cerebras~~ no transcription providers
 
 ---
 
