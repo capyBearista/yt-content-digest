@@ -3,13 +3,24 @@ Video Summarizer - YouTube video analysis tool
 
 This tool downloads YouTube metadata, subtitles, and generates AI summaries.
 Accepts either a file containing YouTube URLs (one per line) or a single YouTube URL directly.
-VTT subtitle files are automatically converted to clean timestamp format 
+Supports individual videos, playlists, and channels with configurable processing limits.
+VTT subtitle files are automatically converted to clean timestamp format
 with millisecond precision ([Xs.XXXs -> Ys.YYYs] Text) for consistency
 with faster-whisper transcription output.
 
 Usage:
-    python ingest_video.py <file_with_urls>           # Process URLs from file
-    python ingest_video.py <youtube_url>              # Process single URL
+    python ingest_video.py urls.txt                           # Process URLs from file
+    python ingest_video.py https://www.youtube.com/watch?v=ID # Process single video
+    python ingest_video.py @LinuxfoundationOrg --channel-limit 25  # Process channel
+    python ingest_video.py UCfX55Sx5hEFjoC3cNs6mCUQ            # Process by channel ID
+
+Supported input formats:
+    - Single video URLs
+    - Playlist URLs
+    - Channel usernames (@username)
+    - Channel IDs (UC...)
+    - Channel URLs (youtube.com/@username or youtube.com/channel/UC...)
+    - Mixed files containing any combination of the above
 """
 import argparse
 import sys
@@ -41,6 +52,19 @@ def get_encoding_for_model(provider: str, model: str):
     else:
         # Default fallback for most models (GPT-4, GPT-3.5, etc.)
         return tiktoken.get_encoding("cl100k_base")
+
+def channel_limit_type(value: str) -> str:
+    """Custom type function for channel limit argument validation"""
+    if value.lower() == 'all':
+        return 'all'
+    
+    try:
+        num = int(value)
+        if num <= 0:
+            raise argparse.ArgumentTypeError(f"Channel limit must be a positive integer or 'all', got: {value}")
+        return str(num)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Channel limit must be a positive integer or 'all', got: {value}")
 
 def count_tokens(text: str, encoding) -> int:
     """Count tokens in text using the provided encoding"""
@@ -165,6 +189,7 @@ def get_parser():
     parser.add_argument("--all-comments", action="store_true", help="Parse ALL comments")
     parser.add_argument("--no-subtitles", action="store_true", help="Skip subtitle download and directly download audio for transcription")
     parser.add_argument("--save", choices=["meta", "video", "all"], help="Save mode: meta (metadata/transcripts only), video (video file only), all (everything)")
+    parser.add_argument("--channel-limit", type=channel_limit_type, default="10", help="Max videos to process from channels (positive integer or 'all', default: 10)")
     return parser
 
 def validate_config(config: dict) -> None:
@@ -1043,14 +1068,42 @@ def main(args):
         return None
 
     def is_youtube_url(input_str):
-        """Check if input string is a YouTube URL"""
-        return ('youtube.com' in input_str or 'youtu.be' in input_str) and ('http' in input_str)
+        """Check if input string is a YouTube URL or YouTube identifier"""
+        # Full YouTube URLs
+        if ('youtube.com' in input_str or 'youtu.be' in input_str) and ('http' in input_str):
+            return True
+        
+        # YouTube channel username format (@username)
+        if input_str.startswith('@'):
+            return True
+        
+        # YouTube channel ID format (UC... with exactly 24 characters)
+        if input_str.startswith('UC') and len(input_str) == 24:
+            return True
+            
+        return False
 
     def classify_url(url: str) -> tuple:
         """
-        Classify YouTube URL as video or playlist.
-        Returns: ('video', url) or ('playlist', url)
+        Classify YouTube URL as video, playlist, or channel.
+        Returns: ('video', url) or ('playlist', url) or ('channel', url)
+        Normalizes channel URLs to include /videos tab to exclude shorts/live.
         """
+        # Check for bare channel ID first (UC... format, 24 chars)
+        if url.startswith('UC') and len(url) == 24:
+            return ('channel', f"https://www.youtube.com/channel/{url}/videos")
+
+        # Check for bare @username input
+        if url.startswith('@'):
+            return ('channel', f"https://www.youtube.com/@{url[1:]}/videos")
+
+        # Channel indicators in full URLs: /@username, /channel/UC..., /c/channelname
+        if '/@' in url or '/channel/' in url or '/c/' in url:
+            # Full URL - append /videos if not present
+            if '/videos' not in url:
+                url = url.rstrip('/') + '/videos'
+            return ('channel', url)
+
         # Playlist indicators: youtube.com/playlist?list= OR ?list= without ?v=
         if 'youtube.com/playlist?' in url and 'list=' in url:
             return ('playlist', url)
@@ -1106,6 +1159,81 @@ def main(args):
                 'videos': videos
             }
 
+    def expand_channel(channel_url: str, channel_limit: str, console) -> dict:
+        """
+        Expand channel URL using yt-dlp.
+        Returns dict with channel_id, channel_name, description, total_count, videos list
+
+        Args:
+            channel_url: YouTube channel URL (normalized to include /videos)
+            channel_limit: String from argparse choices ("10", "25", "50", "100", "all")
+            console: Rich console for output
+        """
+        import yt_dlp
+
+        console.print(f"[yellow]Extracting channel information...[/yellow]")
+
+        # Convert limit string to integer or None for "all"
+        if channel_limit == "all":
+            max_videos = None  # yt-dlp will fetch all videos
+            console.print("[blue]Fetching ALL videos from channel (this may take a while)...[/blue]")
+        else:
+            max_videos = int(channel_limit)
+            console.print(f"[blue]Fetching up to {max_videos} videos from channel...[/blue]")
+
+        ydl_opts: dict[str, Any] = {
+            'extract_flat': True,  # Don't download videos, just get metadata
+            'quiet': True,
+            'no_warnings': True,
+        }
+
+        # Add playlistend option if limit is specified
+        if max_videos is not None:
+            ydl_opts['playlistend'] = max_videos
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore
+            channel_info = ydl.extract_info(channel_url, download=False)
+
+            # Extract channel metadata
+            channel_id = channel_info.get('channel_id', channel_info.get('id', 'unknown'))
+            channel_name = channel_info.get('channel', channel_info.get('uploader', 'Unknown Channel'))
+            description = channel_info.get('description', 'No description available')
+            entries = channel_info.get('entries', [])
+
+            # Filter None entries (deleted/private videos)
+            videos = []
+            for entry in entries:
+                if entry is None:
+                    continue
+                video_id = entry.get('id')
+                if not video_id:
+                    continue
+                videos.append({
+                    'video_id': video_id,
+                    'video_url': f"https://www.youtube.com/watch?v={video_id}",
+                    'video_title': entry.get('title', 'Unknown Title')
+                })
+
+            # Extract username from channel_name or URL
+            username = channel_name
+            if '@' in channel_url:
+                # Extract @username from URL
+                import re
+                match = re.search(r'@([^/]+)', channel_url)
+                if match:
+                    username = f"@{match.group(1)}"
+
+            console.print(f"[green]Channel: {channel_name} ({len(videos)} videos to process)[/green]")
+
+            return {
+                'channel_id': channel_id,
+                'channel_name': channel_name,
+                'username': username,  # Used for directory naming
+                'description': description,
+                'total_count': len(videos),
+                'videos': videos
+            }
+
     def create_playlist_metadata(playlist_id: str, playlist_data: dict, results: list, console) -> None:
         """
         Create PLAYLIST_{playlist_id}_INFO.md with playlist details and video links.
@@ -1151,6 +1279,57 @@ def main(args):
 
         console.print(f"[green]Playlist metadata saved to {metadata_file}[/green]")
 
+    def create_channel_metadata(channel_id: str, channel_data: dict, results: list, console) -> None:
+        """
+        Create CHANNEL_{username}_INFO.md with channel details and video links.
+        """
+        username = channel_data['username']
+        output_dir = f"CHANNEL_{username}"
+        metadata_file = f"{output_dir}/CHANNEL_{username}_INFO.md"
+
+        # Filter results for this channel
+        channel_results = [r for r in results if r['source'] == f"channel:{channel_id}"]
+        success_count = sum(1 for r in channel_results if r['status'] == 'success')
+        failed_count = sum(1 for r in channel_results if r['status'] == 'failed')
+
+        content = f"""# Channel: {channel_data['channel_name']}
+
+**Username**: {username}
+**Channel ID**: {channel_id}
+**Total Videos Processed**: {channel_data['total_count']}
+**Successfully Processed**: {success_count}
+**Failed**: {failed_count}
+
+## Description
+
+{channel_data['description']}
+
+## Videos (Latest to Oldest)
+
+"""
+
+        for video in channel_data['videos']:
+            video_id = video['video_id']
+            video_title = video['video_title']
+            result = next((r for r in channel_results if r['video_id'] == video_id), None)
+
+            if result and result['status'] == 'success':
+                status_emoji = "✅"
+                link = f"[View Summary](SUMMARY_{video_id}.md)"
+            elif result and result['status'] == 'failed':
+                status_emoji = "❌"
+                link = f"Failed: {result['error']}"
+            else:
+                status_emoji = "⏭️"
+                link = "Skipped"
+
+            content += f"- {status_emoji} **{video_title}** ({video_id}) - {link}\n"
+
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        console.print(f"[green]Channel metadata saved to {metadata_file}[/green]")
+
     def print_results_summary(results: list, console) -> None:
         """Print summary of all processing results."""
         if not results:
@@ -1176,22 +1355,24 @@ def main(args):
 
     config = load_config()
 
-    # Determine if input is a file or a direct YouTube URL
+    # Determine if input is a file or a direct YouTube URL/identifier
     if is_youtube_url(args.input):
-        # Direct YouTube URL provided
+        # YouTube URL/identifier provided
         urls = [args.input]
-        console.print(f"[blue]Processing single URL: {args.input}[/blue]")
+        console.print(f"[blue]Processing YouTube input: {args.input}[/blue]")
     else:
         # File path provided - check if it exists
         if not os.path.exists(args.input):
-            # Check if it might be a malformed URL
-            if 'http' in args.input:
+            # Better error messaging for potential YouTube identifiers
+            if args.input.startswith('@') or (args.input.startswith('UC') and len(args.input) == 24):
+                console.print(f"[red]YouTube channel not found or invalid: {args.input}[/red]")
+                console.print("[yellow]Make sure the channel username or ID is correct[/yellow]")
+            elif 'http' in args.input:
                 console.print(f"[red]Invalid YouTube URL: {args.input}[/red]")
                 console.print("[yellow]URLs must contain 'youtube.com' or 'youtu.be'[/yellow]")
-                return
             else:
                 console.print(f"[red]Input file not found: {args.input}[/red]")
-                return
+            return
 
         with open(args.input, 'r') as f:
             urls = [l.strip() for l in f if l.strip()]
@@ -1201,6 +1382,7 @@ def main(args):
     # Expand playlists and build processing queue
     processing_items = []
     playlists = {}  # Track playlist metadata
+    channels = {}   # Track channel metadata
     results = []    # Track success/failure
 
     for url in urls:
@@ -1225,11 +1407,40 @@ def main(args):
                         'video_title': video['video_title'],
                         'source_type': 'playlist',
                         'playlist_id': playlist_id,
+                        'channel_id': None,
                         'output_dir': playlist_dir,
                     })
             except Exception as e:
                 console.print(f"[red]Skipping playlist: {e}[/red]")
                 continue
+
+        elif url_type == 'channel':
+            try:
+                channel_data = expand_channel(url_clean, args.channel_limit, console)
+                channel_id = channel_data['channel_id']
+                username = channel_data['username']
+                channels[channel_id] = channel_data
+
+                # Create channel directory
+                channel_dir = f"CHANNEL_{username}"
+                os.makedirs(channel_dir, exist_ok=True)
+                console.print(f"[blue]Created directory: {channel_dir}[/blue]")
+
+                # Add all videos from channel
+                for video in channel_data['videos']:
+                    processing_items.append({
+                        'video_url': video['video_url'],
+                        'video_id': video['video_id'],
+                        'video_title': video['video_title'],
+                        'source_type': 'channel',
+                        'playlist_id': None,
+                        'channel_id': channel_id,
+                        'output_dir': channel_dir,
+                    })
+            except Exception as e:
+                console.print(f"[red]Skipping channel: {e}[/red]")
+                continue
+
         else:
             # Single video
             video_id = extract_video_id(url)
@@ -1243,6 +1454,7 @@ def main(args):
                 'video_title': 'Unknown',
                 'source_type': 'direct',
                 'playlist_id': None,
+                'channel_id': None,
                 'output_dir': '.',
             })
 
@@ -1281,29 +1493,45 @@ def main(args):
             console.print(f"[bold green]Done! Saved to {out_name}[/bold green]")
 
             # Track success
+            source_type = 'direct'
+            if item['playlist_id']:
+                source_type = f"playlist:{item['playlist_id']}"
+            elif item['channel_id']:
+                source_type = f"channel:{item['channel_id']}"
+
             results.append({
                 'video_id': video_id,
                 'video_title': item['video_title'],
                 'status': 'success',
                 'error': None,
                 'output_file': out_name,
-                'source': f"playlist:{item['playlist_id']}" if item['playlist_id'] else 'direct'
+                'source': source_type
             })
         except Exception as e:
             console.print(f"[red]Failed: {e}[/red]")
+            source_type = 'direct'
+            if item['playlist_id']:
+                source_type = f"playlist:{item['playlist_id']}"
+            elif item['channel_id']:
+                source_type = f"channel:{item['channel_id']}"
+
             results.append({
                 'video_id': video_id,
                 'video_title': item['video_title'],
                 'status': 'failed',
                 'error': str(e),
                 'output_file': None,
-                'source': f"playlist:{item['playlist_id']}" if item['playlist_id'] else 'direct'
+                'source': source_type
             })
             continue
 
     # Generate playlist metadata files
     for playlist_id, playlist_data in playlists.items():
         create_playlist_metadata(playlist_id, playlist_data, results, console)
+
+    # Generate channel metadata files
+    for channel_id, channel_data in channels.items():
+        create_channel_metadata(channel_id, channel_data, results, console)
 
     # Print results summary
     print_results_summary(results, console)
