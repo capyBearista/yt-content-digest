@@ -18,7 +18,7 @@ def get_parser():
     parser.add_argument("--comments", type=int, default=100, help="Max comments to parse")
     parser.add_argument("--all-comments", action="store_true", help="Parse ALL comments")
     parser.add_argument("--no-subtitles", action="store_true", help="Skip subtitle download and directly download audio for transcription")
-    parser.add_argument("--save", action="store_true", help="Save all intermediate files (metadata, transcripts, subtitles)")
+    parser.add_argument("--save", choices=["meta", "video", "all"], help="Save mode: meta (metadata/transcripts only), video (video file only), all (everything)")
     return parser
 
 def validate_config(config: dict) -> None:
@@ -286,7 +286,7 @@ class Transcriber:
         else:
             return str(transcription)
 
-def run_yt_dlp(url: str, output_template: str, no_subtitles: bool = False, console=None, max_retries: int = 3):
+def run_yt_dlp(url: str, output_template: str, save_mode: Optional[str] = None, no_subtitles: bool = False, console=None, max_retries: int = 3):
     """Run yt-dlp with robust error handling and retry logic"""
     import subprocess
     
@@ -304,16 +304,21 @@ def run_yt_dlp(url: str, output_template: str, no_subtitles: bool = False, conso
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ]
     
+    # Subtitle handling logic
     if not no_subtitles:
         cmd.extend([
             "--write-subs",
             "--write-auto-subs",
             "--sub-lang", "en",
         ])
+    
+    # Video download logic based on save_mode (default: no video download for optimization)
+    if save_mode in ["video", "all"]:
+        # Download video file (default yt-dlp behavior)
+        pass
     else:
-        cmd.extend([
-            "--skip-download",
-        ])
+        # Default behavior: skip video download for performance optimization
+        cmd.extend(["--skip-download"])
     
     cmd.extend([
         "--output", output_template,
@@ -613,7 +618,7 @@ def _merge_overlapping_captions(segments: list, console) -> list:
     console.print(f"[blue]Processed {len(segments)} captions into {len(final_merged)} clean segments[/blue]")
     return final_merged
 
-def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles: bool = False, save_files: bool = False) -> str:
+def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles: bool = False, save_mode: Optional[str] = None) -> str:
     import glob, os
     if not no_subtitles:
         vtt_files = glob.glob(f"{base_name}*.vtt")
@@ -635,14 +640,15 @@ def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles
         transcriber = Transcriber(config)
         transcript = transcriber.transcribe(audio_path, console)
         
-        # Save transcript to file only if save_files is True
-        if save_files:
+        # Save transcript to file based on save_mode
+        if save_mode in ["meta", "all"]:
             transcript_path = f"{base_name}_transcript.txt"
             with open(transcript_path, "w", encoding="utf-8") as f:
                 f.write(transcript)
             console.print(f"[green]Transcript saved to {transcript_path}[/green]")
 
-        if os.path.exists(audio_path):
+        # Clean up audio file (unless save_mode="all")
+        if save_mode != "all" and os.path.exists(audio_path):
             os.remove(audio_path)
         return transcript
     return "[No transcript available]"
@@ -786,37 +792,68 @@ You MUST strictly follow this Markdown structure. Do not output anything else.
     except Exception as e:
         return f"LLM Error: {str(e)}"
 
-def cleanup_files(base_name: str, save_files: bool, console) -> None:
-    """Clean up intermediate files if save_files is False."""
-    if save_files:
+def cleanup_files(base_name: str, save_mode: Optional[str], console) -> None:
+    """Clean up files based on save mode"""
+    if save_mode == "all":
+        # Keep everything
         return
     
     import glob
     import os
     
-    # Files to clean up: info.json, .vtt files, transcript files, comment files, and video files
-    patterns = [
-        f"{base_name}*.info.json",
-        f"{base_name}*.vtt", 
-        f"{base_name}_transcript.txt",
-        f"{base_name}*.comments.json",
-        f"{base_name}",  # Video file without extension
-        f"{base_name}.*"  # Any other files with extensions
-    ]
+    def _remove_files(patterns: list):
+        """Helper function to remove files matching patterns"""
+        for pattern in patterns:
+            files = glob.glob(pattern)
+            for file_path in files:
+                # Don't remove the summary file
+                if file_path.startswith("SUMMARY_"):
+                    continue
+                try:
+                    os.remove(file_path)
+                except (PermissionError, FileNotFoundError, OSError) as e:
+                    console.print(f"[red]Error removing {file_path}: {e}[/red]")
     
-    for pattern in patterns:
-        files = glob.glob(pattern)
-        for file_path in files:
-            # Don't remove the summary file
-            if file_path.startswith("SUMMARY_"):
-                continue
-            try:
-                os.remove(file_path)
-            except (PermissionError, FileNotFoundError, OSError) as e:
-                console.print(f"[red]Error removing {file_path}: {e}[/red]")
+    if not save_mode:
+        # Default: clean up everything except summary
+        patterns_to_clean = [
+            f"{base_name}*.info.json",
+            f"{base_name}*.vtt",
+            f"{base_name}_transcript.txt", 
+            f"{base_name}*.comments.json",
+            f"{base_name}",     # Video file without extension
+            f"{base_name}.*"    # Other files with extensions
+        ]
+        _remove_files(patterns_to_clean)
+        
+    elif save_mode == "meta":
+        # Keep: .info.json, .vtt, _transcript.txt, .comments.json
+        # Remove: video files
+        patterns_to_clean = [
+            f"{base_name}",         # Video file without extension
+            f"{base_name}.mp4",     # Common video extensions
+            f"{base_name}.webm", 
+            f"{base_name}.mkv",
+            f"{base_name}.avi",
+            f"{base_name}.m4a",
+            f"{base_name}.mp3",
+            f"{base_name}.opus"
+        ]
+        _remove_files(patterns_to_clean)
+        
+    elif save_mode == "video":
+        # Keep: video file only  
+        # Remove: everything else
+        patterns_to_clean = [
+            f"{base_name}*.info.json",
+            f"{base_name}*.vtt",
+            f"{base_name}_transcript.txt",
+            f"{base_name}*.comments.json"
+        ]
+        _remove_files(patterns_to_clean)
 
 def main(args):
-    import os, json, glob
+    import os, json, glob, time
     try:
         from rich.console import Console
     except Exception:
@@ -829,6 +866,9 @@ def main(args):
             print(*args, **kwargs)
 
     console = Console() if Console else _FallbackConsole()
+    
+    # Start timing the entire script execution
+    script_start_time = time.time()
 
     config = load_config()
 
@@ -845,7 +885,7 @@ def main(args):
         console.rule(f"[bold green]Processing {video_id}")
 
         try:
-            run_yt_dlp(url, base_name, args.no_subtitles, console)
+            run_yt_dlp(url, base_name, args.save, args.no_subtitles, console)
         except Exception as e:
             console.print(f"[red]yt-dlp failed after all retries: {e}[/red]")
             continue
@@ -875,10 +915,16 @@ COMMENTS:
         with open(out_name, 'w', encoding='utf-8') as f:
             f.write(summary + "\n\n" + "="*30 + "\nRAW DATA\n" + "="*30 + "\n" + context)
 
-        # Clean up intermediate files if --save flag not provided
+        # Clean up intermediate files based on save mode
         cleanup_files(base_name, args.save, console)
 
         console.print(f"[bold green]Done! Saved to {out_name}[/bold green]")
+
+    # End timing and display total execution time
+    script_end_time = time.time()
+    total_duration = script_end_time - script_start_time
+    minutes, seconds = divmod(total_duration, 60)
+    console.print(f"\n[bold blue]Script completed in {int(minutes):02d}:{seconds:05.2f}[/bold blue]")
 
 if __name__ == "__main__":
     parser = get_parser()
