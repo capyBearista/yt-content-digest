@@ -20,7 +20,7 @@
 - [X] Look into other transcription providers to add
   - [X] ~~Cerebras~~ no transcription providers
 - [X] Add playlist input processing
-- [ ] Add channel input processing
+- [X] Add channel input processing
 
 ---
 
