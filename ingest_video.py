@@ -953,7 +953,7 @@ def cleanup_files(base_name: str, save_mode: Optional[str], console) -> None:
             files = glob.glob(pattern)
             for file_path in files:
                 # Don't remove the summary file
-                if file_path.startswith("SUMMARY_"):
+                if "SUMMARY_" in os.path.basename(file_path):
                     continue
                 try:
                     os.remove(file_path)
@@ -1046,6 +1046,129 @@ def main(args):
         """Check if input string is a YouTube URL"""
         return ('youtube.com' in input_str or 'youtu.be' in input_str) and ('http' in input_str)
 
+    def classify_url(url: str) -> tuple:
+        """
+        Classify YouTube URL as video or playlist.
+        Returns: ('video', url) or ('playlist', url)
+        """
+        # Playlist indicators: youtube.com/playlist?list= OR ?list= without ?v=
+        if 'youtube.com/playlist?' in url and 'list=' in url:
+            return ('playlist', url)
+        elif '?list=' in url and '&v=' not in url and '?v=' not in url:
+            return ('playlist', url)
+        else:
+            return ('video', url)
+
+    def expand_playlist(playlist_url: str, console) -> dict:
+        """
+        Expand playlist URL using yt-dlp.
+        Returns dict with playlist_id, title, uploader, playlist_count, videos list
+        """
+        import yt_dlp
+
+        console.print(f"[yellow]Extracting playlist information...[/yellow]")
+
+        ydl_opts = {
+            'extract_flat': True,  # Don't download videos, just get metadata
+            'quiet': True,
+            'no_warnings': True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            playlist_info = ydl.extract_info(playlist_url, download=False)
+
+            playlist_id = playlist_info.get('id', 'unknown')
+            title = playlist_info.get('title', 'Untitled Playlist')
+            uploader = playlist_info.get('uploader', 'Unknown')
+            entries = playlist_info.get('entries', [])
+
+            # Filter None entries (deleted/private videos)
+            videos = []
+            for entry in entries:
+                if entry is None:
+                    continue
+                video_id = entry.get('id')
+                if not video_id:
+                    continue
+                videos.append({
+                    'video_id': video_id,
+                    'video_url': f"https://www.youtube.com/watch?v={video_id}",
+                    'video_title': entry.get('title', 'Unknown Title')
+                })
+
+            console.print(f"[green]Playlist: {title} ({len(videos)} videos)[/green]")
+
+            return {
+                'playlist_id': playlist_id,
+                'title': title,
+                'uploader': uploader,
+                'playlist_count': len(videos),
+                'videos': videos
+            }
+
+    def create_playlist_metadata(playlist_id: str, playlist_data: dict, results: list, console) -> None:
+        """
+        Create PLAYLIST_{playlist_id}_INFO.md with playlist details and video links.
+        """
+        output_dir = f"PLAYLIST_{playlist_id}"
+        metadata_file = f"{output_dir}/PLAYLIST_{playlist_id}_INFO.md"
+
+        # Filter results for this playlist
+        playlist_results = [r for r in results if r['source'] == f"playlist:{playlist_id}"]
+        success_count = sum(1 for r in playlist_results if r['status'] == 'success')
+        failed_count = sum(1 for r in playlist_results if r['status'] == 'failed')
+
+        content = f"""# Playlist: {playlist_data['title']}
+
+**Uploader**: {playlist_data['uploader']}
+**Total Videos**: {playlist_data['playlist_count']}
+**Successfully Processed**: {success_count}
+**Failed**: {failed_count}
+
+## Videos
+
+"""
+
+        for video in playlist_data['videos']:
+            video_id = video['video_id']
+            video_title = video['video_title']
+            result = next((r for r in playlist_results if r['video_id'] == video_id), None)
+
+            if result and result['status'] == 'success':
+                status_emoji = ""
+                link = f"[View Summary](SUMMARY_{video_id}.md)"
+            elif result and result['status'] == 'failed':
+                status_emoji = "❌ "
+                link = f"Failed: {result['error']}"
+            else:
+                status_emoji = "⏭️ "
+                link = "Skipped"
+
+            content += f"- {status_emoji}**{video_title}** ({video_id}) - {link}\n"
+
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        console.print(f"[green]Playlist metadata saved to {metadata_file}[/green]")
+
+    def print_results_summary(results: list, console) -> None:
+        """Print summary of all processing results."""
+        if not results:
+            return
+
+        success = [r for r in results if r['status'] == 'success']
+        failed = [r for r in results if r['status'] == 'failed']
+
+        console.rule("[bold blue]Processing Summary")
+        console.print(f"[green]Successful: {len(success)}[/green]")
+        console.print(f"[red]Failed: {len(failed)}[/red]")
+
+        if failed:
+            console.print("\n[yellow]Failed Videos:[/yellow]")
+            for r in failed:
+                console.print(f"  - {r['video_id']}: {r['video_title']}")
+                console.print(f"    Error: {r['error']}")
+
     console = Console() if Console else _FallbackConsole()
     
     # Start timing the entire script execution
@@ -1075,41 +1198,115 @@ def main(args):
         
         console.print(f"[blue]Processing {len(urls)} URLs from file: {args.input}[/blue]")
 
+    # Expand playlists and build processing queue
+    processing_items = []
+    playlists = {}  # Track playlist metadata
+    results = []    # Track success/failure
+
     for url in urls:
-        video_id = extract_video_id(url)
-        
-        if not video_id:
-            console.print(f"[red]Error: Could not extract video ID from URL: {url}[/red]")
-            continue
-            
-        base_name = f"video_{video_id}"
+        url_type, url_clean = classify_url(url)
+
+        if url_type == 'playlist':
+            try:
+                playlist_data = expand_playlist(url, console)
+                playlist_id = playlist_data['playlist_id']
+                playlists[playlist_id] = playlist_data
+
+                # Create playlist directory
+                playlist_dir = f"PLAYLIST_{playlist_id}"
+                os.makedirs(playlist_dir, exist_ok=True)
+                console.print(f"[blue]Created directory: {playlist_dir}[/blue]")
+
+                # Add all videos from playlist
+                for video in playlist_data['videos']:
+                    processing_items.append({
+                        'video_url': video['video_url'],
+                        'video_id': video['video_id'],
+                        'video_title': video['video_title'],
+                        'source_type': 'playlist',
+                        'playlist_id': playlist_id,
+                        'output_dir': playlist_dir,
+                    })
+            except Exception as e:
+                console.print(f"[red]Skipping playlist: {e}[/red]")
+                continue
+        else:
+            # Single video
+            video_id = extract_video_id(url)
+            if not video_id:
+                console.print(f"[red]Could not extract video ID: {url}[/red]")
+                continue
+
+            processing_items.append({
+                'video_url': url,
+                'video_id': video_id,
+                'video_title': 'Unknown',
+                'source_type': 'direct',
+                'playlist_id': None,
+                'output_dir': '.',
+            })
+
+    console.print(f"[bold blue]Total videos to process: {len(processing_items)}[/bold blue]")
+
+    for item in processing_items:
+        video_id = item['video_id']
+        video_url = item['video_url']
+        output_dir = item['output_dir']
+
+        base_name = f"{output_dir}/video_{video_id}"
         console.rule(f"[bold green]Processing {video_id}")
 
         try:
-            run_yt_dlp(url, base_name, args.save, args.no_subtitles, console)
+            run_yt_dlp(video_url, base_name, args.save, args.no_subtitles, console)
+
+            json_path = glob.glob(f"{base_name}*.info.json")[0]
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Update title from metadata
+            item['video_title'] = data.get('title', 'Unknown')
+
+            transcript = get_transcript(base_name, video_url, config, console, args.no_subtitles, args.save)
+
+            # Build intelligent context with token-based limits
+            context = build_intelligent_context(data, transcript, config, console)
+
+            summary = generate_summary(context, config, console)
+
+            out_name = f"{output_dir}/SUMMARY_{video_id}.md"
+            with open(out_name, 'w', encoding='utf-8') as f:
+                f.write(summary + "\n\n" + "="*30 + "\nRAW DATA\n" + "="*30 + "\n" + context)
+
+            cleanup_files(base_name, args.save, console)
+            console.print(f"[bold green]Done! Saved to {out_name}[/bold green]")
+
+            # Track success
+            results.append({
+                'video_id': video_id,
+                'video_title': item['video_title'],
+                'status': 'success',
+                'error': None,
+                'output_file': out_name,
+                'source': f"playlist:{item['playlist_id']}" if item['playlist_id'] else 'direct'
+            })
         except Exception as e:
-            console.print(f"[red]yt-dlp failed after all retries: {e}[/red]")
+            console.print(f"[red]Failed: {e}[/red]")
+            results.append({
+                'video_id': video_id,
+                'video_title': item['video_title'],
+                'status': 'failed',
+                'error': str(e),
+                'output_file': None,
+                'source': f"playlist:{item['playlist_id']}" if item['playlist_id'] else 'direct'
+            })
             continue
 
-        json_path = glob.glob(f"{base_name}*.info.json")[0]
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+    # Generate playlist metadata files
+    for playlist_id, playlist_data in playlists.items():
+        create_playlist_metadata(playlist_id, playlist_data, results, console)
 
-        transcript = get_transcript(base_name, url, config, console, args.no_subtitles, args.save)
-
-        # Build intelligent context with token-based limits
-        context = build_intelligent_context(data, transcript, config, console)
-
-        summary = generate_summary(context, config, console)
-
-        out_name = f"SUMMARY_{video_id}.md"
-        with open(out_name, 'w', encoding='utf-8') as f:
-            f.write(summary + "\n\n" + "="*30 + "\nRAW DATA\n" + "="*30 + "\n" + context)
-
-        # Clean up intermediate files based on save mode
-        cleanup_files(base_name, args.save, console)
-
-        console.print(f"[bold green]Done! Saved to {out_name}[/bold green]")
+    # Print results summary
+    print_results_summary(results, console)
 
     # End timing and display total execution time
     script_end_time = time.time()
