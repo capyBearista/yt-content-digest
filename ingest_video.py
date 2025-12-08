@@ -17,6 +17,147 @@ import time
 import random
 from typing import Optional, Any
 
+def get_encoding_for_model(provider: str, model: str):
+    """Get the appropriate tiktoken encoding for the given LLM provider and model"""
+    try:
+        import tiktoken
+    except ImportError:
+        raise ImportError("tiktoken is required for token counting. Install with: pip install tiktoken")
+    
+    # Map providers to appropriate encodings
+    if provider.lower() in ['openai']:
+        # Use model-specific encoding for OpenAI
+        try:
+            return tiktoken.encoding_for_model(model)
+        except KeyError:
+            # Fallback for unknown OpenAI models
+            return tiktoken.get_encoding("cl100k_base")
+    elif provider.lower() in ['anthropic', 'claude']:
+        # Claude uses cl100k_base encoding
+        return tiktoken.get_encoding("cl100k_base")
+    elif model and ('gpt-4o' in model.lower() or 'o1' in model.lower()):
+        # GPT-4o and newer models use o200k_base
+        return tiktoken.get_encoding("o200k_base")
+    else:
+        # Default fallback for most models (GPT-4, GPT-3.5, etc.)
+        return tiktoken.get_encoding("cl100k_base")
+
+def count_tokens(text: str, encoding) -> int:
+    """Count tokens in text using the provided encoding"""
+    if not text:
+        return 0
+    return len(encoding.encode(text))
+
+def build_intelligent_context(data: dict, transcript: str, config: dict, console) -> str:
+    """Build context string intelligently based on token limits and content priority"""
+    
+    # Get configuration values with defaults
+    max_tokens = config.get('max_context_tokens', 65536)
+    min_comments = config.get('min_comments', 25)
+    token_buffer = 500  # Larger buffer for safety due to encoding variations
+    
+    # Get appropriate encoding
+    provider = config.get('llm_provider', 'openai')
+    model = config.get('llm_model', 'gpt-4')
+    encoding = get_encoding_for_model(provider, model)
+    
+    console.print(f"[blue]Building context with max {max_tokens} tokens using {encoding.name} encoding[/blue]")
+    
+    # Always include title and description
+    title = data.get('title', '')
+    description = data.get('description', '')
+    
+    title_tokens = count_tokens(f"TITLE: {title}\n", encoding)
+    desc_tokens = count_tokens(f"DESCRIPTION:\n{description}\n\n", encoding)
+    base_tokens = title_tokens + desc_tokens
+    
+    console.print(f"[dim]Title: {title_tokens} tokens, Description: {desc_tokens} tokens[/dim]")
+    
+    # Calculate available space for transcript and comments
+    available_tokens = max_tokens - base_tokens - token_buffer
+    
+    if available_tokens <= 0:
+        console.print(f"[red]Warning: Title and description exceed token limit[/red]")
+        return f"TITLE: {title}\nDESCRIPTION:\n{description}\n\nTRANSCRIPT:\n[Content too large]\n\nCOMMENTS:\n[Content too large]"
+    
+    # Process comments and estimate tokens needed for minimum comments
+    comments = data.get('comments', [])
+    if comments:
+        comments.sort(key=lambda x: x.get('like_count', 0) or 0, reverse=True)
+    
+    # Estimate tokens for minimum comments
+    comments_text_lines = []
+    comments_tokens = 0
+    target_comments = min(min_comments, len(comments))
+    
+    for i, comment in enumerate(comments[:target_comments]):
+        user = comment.get('author', 'Anon')
+        text = comment.get('text', '').replace('\n', ' ')
+        likes = comment.get('like_count', 0)
+        comment_line = f"{i+1}. [{likes} likes] {user}: {text}"
+        line_tokens = count_tokens(comment_line + "\n", encoding)
+        comments_text_lines.append(comment_line)
+        comments_tokens += line_tokens
+    
+    # Reserve space for "TRANSCRIPT:\n" and "COMMENTS:\n" headers
+    transcript_header_tokens = count_tokens("TRANSCRIPT:\n", encoding)
+    comments_header_tokens = count_tokens("\n\nCOMMENTS:\n", encoding)
+    
+    # Calculate space available for transcript
+    transcript_budget = available_tokens - comments_tokens - transcript_header_tokens - comments_header_tokens
+    
+    console.print(f"[dim]Reserved {comments_tokens} tokens for {len(comments_text_lines)} comments[/dim]")
+    console.print(f"[dim]Available for transcript: {transcript_budget} tokens[/dim]")
+    
+    # Process transcript within budget
+    if transcript_budget > 0:
+        # Encode transcript and cut off when budget exceeded
+        transcript_tokens = encoding.encode(transcript)
+        if len(transcript_tokens) <= transcript_budget:
+            # Entire transcript fits, use remaining space for more comments
+            used_transcript_tokens = len(transcript_tokens)
+            remaining_budget = transcript_budget - used_transcript_tokens
+            
+            console.print(f"[green]Full transcript included ({used_transcript_tokens} tokens)[/green]")
+            
+            # Add more comments if space available
+            if remaining_budget > 50 and len(comments_text_lines) < len(comments):
+                for i, comment in enumerate(comments[len(comments_text_lines):], len(comments_text_lines)):
+                    user = comment.get('author', 'Anon')
+                    text = comment.get('text', '').replace('\n', ' ')
+                    likes = comment.get('like_count', 0)
+                    comment_line = f"{i+1}. [{likes} likes] {user}: {text}"
+                    line_tokens = count_tokens(comment_line + "\n", encoding)
+                    
+                    if line_tokens <= remaining_budget:
+                        comments_text_lines.append(comment_line)
+                        remaining_budget -= line_tokens
+                    else:
+                        break
+                        
+                console.print(f"[green]Added {len(comments_text_lines) - target_comments} additional comments[/green]")
+            
+            final_transcript = transcript
+        else:
+            # Truncate transcript to fit budget
+            truncated_tokens = transcript_tokens[:transcript_budget]
+            final_transcript = encoding.decode(truncated_tokens)
+            console.print(f"[yellow]Transcript truncated to {transcript_budget} tokens[/yellow]")
+    else:
+        final_transcript = "[Insufficient space for transcript]"
+        console.print(f"[red]Warning: No space available for transcript[/red]")
+    
+    # Build final context
+    comments_section = "\n".join(comments_text_lines) if comments_text_lines else "No comments found."
+    
+    context = f"TITLE: {title}\nDESCRIPTION:\n{description}\n\nTRANSCRIPT:\n{final_transcript}\n\nCOMMENTS:\n{comments_section}"
+    
+    # Final token count verification
+    final_tokens = count_tokens(context, encoding)
+    console.print(f"[green]Final context: {final_tokens} tokens (limit: {max_tokens})[/green]")
+    
+    return context
+
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("input", help="File with YouTube URLs OR a single YouTube URL")
@@ -955,19 +1096,9 @@ def main(args):
             data = json.load(f)
 
         transcript = get_transcript(base_name, url, config, console, args.no_subtitles, args.save)
-        comments_text = process_comments(data, args.comments, args.all_comments)
 
-        context = f"""TITLE: {data.get('title')}
-DESCRIPTION:
-{data.get('description')}
-
-TRANSCRIPT:
-{transcript[:50000]}
-... (truncated if too long)
-
-COMMENTS:
-{comments_text}
-"""
+        # Build intelligent context with token-based limits
+        context = build_intelligent_context(data, transcript, config, console)
 
         summary = generate_summary(context, config, console)
 

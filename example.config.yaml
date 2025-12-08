@@ -31,6 +31,11 @@ ollama_base_url: "http://localhost:11434"
 llm_provider: "cerebras"
 llm_model: "gpt-oss-120b"
 
+# Maximum context window in tokens (default: 65536)
+max_context_tokens: 65536
+# Minimum number of comments to include (default: 25)
+min_comments: 25
+
 
 # ==========================================
 # TRANSCRIPTION SETTINGS
