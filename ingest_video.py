@@ -853,7 +853,7 @@ def cleanup_files(base_name: str, save_mode: Optional[str], console) -> None:
         _remove_files(patterns_to_clean)
 
 def main(args):
-    import os, json, glob, time
+    import os, json, glob, time, re
     try:
         from rich.console import Console
     except Exception:
@@ -864,6 +864,37 @@ def main(args):
             print(*args, **kwargs)
         def rule(self, *args, **kwargs):
             print(*args, **kwargs)
+
+    def extract_video_id(url):
+        """
+        Extract YouTube video ID from various URL formats.
+        
+        Handles:
+        - https://www.youtube.com/watch?v=VIDEO_ID
+        - https://youtu.be/VIDEO_ID
+        - URLs with tracking parameters (?si=...&list=...)
+        
+        Returns the clean video ID (11 characters, alphanumeric + hyphens/underscores)
+        """
+        # Remove any whitespace
+        url = url.strip()
+        
+        # Pattern for youtu.be/VIDEO_ID format
+        youtu_be_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', url)
+        if youtu_be_match:
+            return youtu_be_match.group(1)
+        
+        # Pattern for youtube.com/watch?v=VIDEO_ID format
+        youtube_watch_match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', url)
+        if youtube_watch_match:
+            return youtube_watch_match.group(1)
+        
+        # Fallback: try the old method for backward compatibility
+        if 'v=' in url:
+            return url.split('v=')[1].split('&')[0][:11]
+        
+        # If no pattern matches, return None to indicate invalid URL
+        return None
 
     console = Console() if Console else _FallbackConsole()
     
@@ -880,7 +911,12 @@ def main(args):
         urls = [l.strip() for l in f if l.strip()]
 
     for url in urls:
-        video_id = url.split("v=")[-1].split("&")[0]
+        video_id = extract_video_id(url)
+        
+        if not video_id:
+            console.print(f"[red]Error: Could not extract video ID from URL: {url}[/red]")
+            continue
+            
         base_name = f"video_{video_id}"
         console.rule(f"[bold green]Processing {video_id}")
 
