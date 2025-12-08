@@ -1,4 +1,4 @@
-- [X] Remove `download_audio_if_mis if sing_subs` config line
+- [X] Remove `download_audio_if_missing_subs` config line
 - [X] Add SUMMARY ignore line
 - [X] Make sure Groq transcription method works (test again)
 - [X] Remove transcription/summarization provider and model defaults (show error if not defined in config)
@@ -19,7 +19,7 @@
   - [X] ~~DeepSeek~~ no free tier
 - [X] Look into other transcription providers to add
   - [X] ~~Cerebras~~ no transcription providers
-- [ ] Add playlist input processing
+- [X] Add playlist input processing
 - [ ] Add channel input processing
 
 ---
