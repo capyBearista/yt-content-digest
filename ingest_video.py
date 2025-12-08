@@ -2,9 +2,14 @@
 Video Summarizer - YouTube video analysis tool
 
 This tool downloads YouTube metadata, subtitles, and generates AI summaries.
+Accepts either a file containing YouTube URLs (one per line) or a single YouTube URL directly.
 VTT subtitle files are automatically converted to clean timestamp format 
 with millisecond precision ([Xs.XXXs -> Ys.YYYs] Text) for consistency
 with faster-whisper transcription output.
+
+Usage:
+    python ingest_video.py <file_with_urls>           # Process URLs from file
+    python ingest_video.py <youtube_url>              # Process single URL
 """
 import argparse
 import sys
@@ -14,7 +19,7 @@ from typing import Optional, Any
 
 def get_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("input_file", help="File with YouTube URLs")
+    parser.add_argument("input", help="File with YouTube URLs OR a single YouTube URL")
     parser.add_argument("--comments", type=int, default=100, help="Max comments to parse")
     parser.add_argument("--all-comments", action="store_true", help="Parse ALL comments")
     parser.add_argument("--no-subtitles", action="store_true", help="Skip subtitle download and directly download audio for transcription")
@@ -896,6 +901,10 @@ def main(args):
         # If no pattern matches, return None to indicate invalid URL
         return None
 
+    def is_youtube_url(input_str):
+        """Check if input string is a YouTube URL"""
+        return ('youtube.com' in input_str or 'youtu.be' in input_str) and ('http' in input_str)
+
     console = Console() if Console else _FallbackConsole()
     
     # Start timing the entire script execution
@@ -903,12 +912,27 @@ def main(args):
 
     config = load_config()
 
-    if not os.path.exists(args.input_file):
-        console.print("[red]Input file not found.[/red]")
-        return
+    # Determine if input is a file or a direct YouTube URL
+    if is_youtube_url(args.input):
+        # Direct YouTube URL provided
+        urls = [args.input]
+        console.print(f"[blue]Processing single URL: {args.input}[/blue]")
+    else:
+        # File path provided - check if it exists
+        if not os.path.exists(args.input):
+            # Check if it might be a malformed URL
+            if 'http' in args.input:
+                console.print(f"[red]Invalid YouTube URL: {args.input}[/red]")
+                console.print("[yellow]URLs must contain 'youtube.com' or 'youtu.be'[/yellow]")
+                return
+            else:
+                console.print(f"[red]Input file not found: {args.input}[/red]")
+                return
 
-    with open(args.input_file, 'r') as f:
-        urls = [l.strip() for l in f if l.strip()]
+        with open(args.input, 'r') as f:
+            urls = [l.strip() for l in f if l.strip()]
+        
+        console.print(f"[blue]Processing {len(urls)} URLs from file: {args.input}[/blue]")
 
     for url in urls:
         video_id = extract_video_id(url)

@@ -9,6 +9,7 @@
 - [X] Test summarization providers
 - [X] Clean links added to input file (remove timestamps, extra text, tracking text)
 - [x] Enhance video summary and analysis prompt
+- [X] Add direct URL input option (in addition to file input)
 - [ ] Make sure longer videos have longer summaries
   - May have to introduce different prompt if transcript or audio is longer
 - [ ] Look into and integrate YouTube API if applicable
