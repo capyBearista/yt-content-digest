@@ -1068,13 +1068,13 @@ def main(args):
 
         console.print(f"[yellow]Extracting playlist information...[/yellow]")
 
-        ydl_opts = {
+        ydl_opts: dict[str, Any] = {
             'extract_flat': True,  # Don't download videos, just get metadata
             'quiet': True,
             'no_warnings': True,
         }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # type: ignore
             playlist_info = ydl.extract_info(playlist_url, download=False)
 
             playlist_id = playlist_info.get('id', 'unknown')
