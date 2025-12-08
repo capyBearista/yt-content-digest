@@ -12,3 +12,5 @@ Transcription API failed (APIStatusError): Error code: 413 - {'error': {'message
 grok-4.1-fast:free has 2,000,000 context window: https://openrouter.ai/x-ai/grok-4.1-fast:free
 
 Haven't tested with Anthropic, Grok since they don't have free tiers and require payment.
+
+Cerebras has odd behavior when it generates a response for summarization tasks for long videos (e.g., 100 minutes).
