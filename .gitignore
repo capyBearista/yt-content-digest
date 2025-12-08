@@ -91,8 +91,12 @@ yarn-error.log*
 *.bak
 *.tmp
 
+.python-version
 config.yaml
+
 *.vtt
+
 SUMMARY_*.md
 !SUMMARY_example.md
-.python-version
+
+PLAYLIST_*
