@@ -27,8 +27,8 @@
 Future
 - Make use of `rich` library (other features)?
 - The project is one program that can do a variety of functions:
-  - download and summarize one/multiple videos (currently working)
-  - download and summarize some or all videos from a channel (TBD)
+  - download and summarize one/multiple videos (working)
+  - download and summarize some or all videos from a channel (working)
   - download and analyze the comments of some or all videos from a channel (TBD)
   - sentiment analysis, but not by using an existing LLM via API (TBD)
   - the intention is to best understand how viewers/visitors to a channel react to the creator (e.g., does the creator usually post divisive content? does the create have an overwhelmingly positive community?) 
