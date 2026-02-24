@@ -94,10 +94,22 @@ yarn-error.log*
 .python-version
 config.yaml
 
+# Transcripts and media files
 *.vtt
+*.m4a*
+*.mp4*
+*.info.json
 
+# Summaries and channel data
 SUMMARY_*.md
 !SUMMARY_example.md
-
 PLAYLIST_*
 CHANNEL_*
+
+# Syncthing
+.stfolder/
+.stignore
+.stversions/
+
+# Cookies
+cookies.txt
