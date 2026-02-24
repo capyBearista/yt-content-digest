@@ -26,7 +26,7 @@ import argparse
 import sys
 import time
 import random
-from typing import Optional, Any
+from typing import Optional, Any, List
 
 def get_encoding_for_model(provider: str, model: str):
     """Get the appropriate tiktoken encoding for the given LLM provider and model"""
@@ -72,8 +72,14 @@ def count_tokens(text: str, encoding) -> int:
         return 0
     return len(encoding.encode(text))
 
-def build_intelligent_context(data: dict, transcript: str, config: dict, console) -> str:
-    """Build context string intelligently based on token limits and content priority"""
+def build_intelligent_context(
+    data: dict,
+    transcript: str,
+    config: dict,
+    console,
+    prefer_comments: bool = False,
+) -> str:
+    """Build context string intelligently based on token limits and priority."""
     
     # Get configuration values with defaults
     max_tokens = config.get('max_context_tokens', 65536)
@@ -85,7 +91,10 @@ def build_intelligent_context(data: dict, transcript: str, config: dict, console
     model = config.get('llm_model', 'gpt-4')
     encoding = get_encoding_for_model(provider, model)
     
-    console.print(f"[blue]Building context with max {max_tokens} tokens using {encoding.name} encoding[/blue]")
+    console.print(
+        "[blue]Building context with max "
+        f"{max_tokens} tokens using {encoding.name} encoding[/blue]"
+    )
     
     # Always include title and description
     title = data.get('title', '')
@@ -95,7 +104,10 @@ def build_intelligent_context(data: dict, transcript: str, config: dict, console
     desc_tokens = count_tokens(f"DESCRIPTION:\n{description}\n\n", encoding)
     base_tokens = title_tokens + desc_tokens
     
-    console.print(f"[dim]Title: {title_tokens} tokens, Description: {desc_tokens} tokens[/dim]")
+    console.print(
+        "[dim]Title: "
+        f"{title_tokens} tokens, Description: {desc_tokens} tokens[/dim]"
+    )
     
     # Calculate available space for transcript and comments
     available_tokens = max_tokens - base_tokens - token_buffer
@@ -109,29 +121,59 @@ def build_intelligent_context(data: dict, transcript: str, config: dict, console
     if comments:
         comments.sort(key=lambda x: x.get('like_count', 0) or 0, reverse=True)
     
+    # Reserve space for "TRANSCRIPT:\n" and "COMMENTS:\n" headers
+    transcript_header_tokens = count_tokens("TRANSCRIPT:\n", encoding)
+    comments_header_tokens = count_tokens("\n\nCOMMENTS:\n", encoding)
+
     # Estimate tokens for minimum comments
     comments_text_lines = []
     comments_tokens = 0
     target_comments = min(min_comments, len(comments))
     
-    for i, comment in enumerate(comments[:target_comments]):
-        user = comment.get('author', 'Anon')
-        text = comment.get('text', '').replace('\n', ' ')
-        likes = comment.get('like_count', 0)
-        comment_line = f"{i+1}. [{likes} likes] {user}: {text}"
-        line_tokens = count_tokens(comment_line + "\n", encoding)
-        comments_text_lines.append(comment_line)
-        comments_tokens += line_tokens
-    
-    # Reserve space for "TRANSCRIPT:\n" and "COMMENTS:\n" headers
-    transcript_header_tokens = count_tokens("TRANSCRIPT:\n", encoding)
-    comments_header_tokens = count_tokens("\n\nCOMMENTS:\n", encoding)
+    if prefer_comments:
+        comments_budget = (
+            available_tokens
+            - transcript_header_tokens
+            - comments_header_tokens
+        )
+        comments_budget = max(0, comments_budget)
+
+        for i, comment in enumerate(comments):
+            user = comment.get('author', 'Anon')
+            text = comment.get('text', '').replace('\n', ' ')
+            likes = comment.get('like_count', 0)
+            comment_line = f"{i+1}. [{likes} likes] {user}: {text}"
+            line_tokens = count_tokens(comment_line + "\n", encoding)
+            if comments_tokens + line_tokens > comments_budget:
+                break
+            comments_text_lines.append(comment_line)
+            comments_tokens += line_tokens
+    else:
+        for i, comment in enumerate(comments[:target_comments]):
+            user = comment.get('author', 'Anon')
+            text = comment.get('text', '').replace('\n', ' ')
+            likes = comment.get('like_count', 0)
+            comment_line = f"{i+1}. [{likes} likes] {user}: {text}"
+            line_tokens = count_tokens(comment_line + "\n", encoding)
+            comments_text_lines.append(comment_line)
+            comments_tokens += line_tokens
     
     # Calculate space available for transcript
-    transcript_budget = available_tokens - comments_tokens - transcript_header_tokens - comments_header_tokens
+    transcript_budget = (
+        available_tokens
+        - comments_tokens
+        - transcript_header_tokens
+        - comments_header_tokens
+    )
     
-    console.print(f"[dim]Reserved {comments_tokens} tokens for {len(comments_text_lines)} comments[/dim]")
-    console.print(f"[dim]Available for transcript: {transcript_budget} tokens[/dim]")
+    console.print(
+        "[dim]Reserved "
+        f"{comments_tokens} tokens for {len(comments_text_lines)} comments[/dim]"
+    )
+    console.print(
+        "[dim]Available for transcript: "
+        f"{transcript_budget} tokens[/dim]"
+    )
     
     # Process transcript within budget
     if transcript_budget > 0:
@@ -142,24 +184,38 @@ def build_intelligent_context(data: dict, transcript: str, config: dict, console
             used_transcript_tokens = len(transcript_tokens)
             remaining_budget = transcript_budget - used_transcript_tokens
             
-            console.print(f"[green]Full transcript included ({used_transcript_tokens} tokens)[/green]")
+            console.print(
+                "[green]Full transcript included ("
+                f"{used_transcript_tokens} tokens)[/green]"
+            )
             
             # Add more comments if space available
-            if remaining_budget > 50 and len(comments_text_lines) < len(comments):
-                for i, comment in enumerate(comments[len(comments_text_lines):], len(comments_text_lines)):
+            if (
+                remaining_budget > 50
+                and len(comments_text_lines) < len(comments)
+                and not prefer_comments
+            ):
+                for i, comment in enumerate(
+                    comments[len(comments_text_lines):],
+                    len(comments_text_lines),
+                ):
                     user = comment.get('author', 'Anon')
                     text = comment.get('text', '').replace('\n', ' ')
                     likes = comment.get('like_count', 0)
                     comment_line = f"{i+1}. [{likes} likes] {user}: {text}"
                     line_tokens = count_tokens(comment_line + "\n", encoding)
-                    
+
                     if line_tokens <= remaining_budget:
                         comments_text_lines.append(comment_line)
                         remaining_budget -= line_tokens
                     else:
                         break
-                        
-                console.print(f"[green]Added {len(comments_text_lines) - target_comments} additional comments[/green]")
+
+                console.print(
+                    "[green]Added "
+                    f"{len(comments_text_lines) - target_comments} "
+                    "additional comments[/green]"
+                )
             
             final_transcript = transcript
         else:
@@ -185,12 +241,40 @@ def build_intelligent_context(data: dict, transcript: str, config: dict, console
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("input", help="File with YouTube URLs OR a single YouTube URL")
-    parser.add_argument("--comments", type=int, default=100, help="Max comments to parse")
-    parser.add_argument("--all-comments", action="store_true", help="Parse ALL comments")
+    parser.add_argument(
+        "--comments",
+        type=int,
+        default=None,
+        help="Minimum comments to include (overrides config.yaml)",
+    )
+    parser.add_argument(
+        "--all-comments",
+        action="store_true",
+        help=(
+            "Request all comments from yt-dlp and prefer comments over transcript"
+        ),
+    )
     parser.add_argument("--no-subtitles", action="store_true", help="Skip subtitle download and directly download audio for transcription")
     parser.add_argument("--save", choices=["meta", "video", "all"], help="Save mode: meta (metadata/transcripts only), video (video file only), all (everything)")
     parser.add_argument("--channel-limit", type=channel_limit_type, default="10", help="Max videos to process from channels (positive integer or 'all', default: 10)")
+    parser.add_argument(
+        "--cookies",
+        help="Path to a Netscape cookies.txt file for yt-dlp",
+    )
     return parser
+
+def resolve_yt_dlp_cookies(
+    config: dict,
+    args: argparse.Namespace,
+) -> Optional[str]:
+    """Resolve cookie settings for yt-dlp with CLI taking priority."""
+    return args.cookies or config.get("yt_dlp_cookies")
+
+def build_yt_dlp_cookie_args(cookies_path: Optional[str]) -> List[str]:
+    """Build yt-dlp cookie arguments from a cookies.txt file."""
+    if cookies_path:
+        return ["--cookies", cookies_path]
+    return []
 
 def validate_config(config: dict) -> None:
     """Validate configuration and check API key availability for configured providers"""
@@ -457,9 +541,50 @@ class Transcriber:
         else:
             return str(transcription)
 
-def run_yt_dlp(url: str, output_template: str, save_mode: Optional[str] = None, no_subtitles: bool = False, console=None, max_retries: int = 3):
-    """Run yt-dlp with robust error handling and retry logic"""
+def run_yt_dlp(
+    url: str,
+    output_template: str,
+    save_mode: Optional[str] = None,
+    no_subtitles: bool = False,
+    console=None,
+    max_retries: int = 3,
+    all_comments: bool = False,
+    comments_limit: int = 100,
+    cookies_path: Optional[str] = None,
+):
+    """Run yt-dlp with robust error handling and retry logic.
+    
+    KNOWN LIMITATION: YouTube's comment API has pagination/continuation limits.
+    yt-dlp may not extract all comments even with max_comments=all settings.
+    This appears to be a limitation of YouTube's API itself, not yt-dlp.
+    See: https://github.com/yt-dlp/yt-dlp/issues/6290
+    
+    Args:
+        all_comments: If True, extract ALL comments (within API limits). If
+            False, use comments_limit.
+        comments_limit: Maximum comments to extract (used only if all_comments
+            is False).
+        cookies_path: Path to a Netscape cookies.txt file for yt-dlp.
+    """
     import subprocess
+    
+    # Configure YouTube extractor arguments for comment extraction
+    # Format: max-comments,max-parents,max-replies,max-replies-per-thread,max-depth
+    # NOTE: Even with these settings, YouTube's API may return fewer comments than expected
+    if all_comments:
+        # Request all comments with full pagination and all reply threads
+        # Using numeric "all" representation (API may still return partial results)
+        youtube_extractor_args = "youtube:max_comments=all,all,all,all,all"
+        if console:
+            console.print(
+                "[yellow]Note: Requesting all comments (YouTube API may return "
+                "partial results)[/yellow]"
+            )
+    else:
+        # Limit comments but still try to get full pagination within limit
+        # Allocate limit across parents and replies for better distribution
+        max_parents = comments_limit
+        youtube_extractor_args = f"youtube:max_comments={comments_limit},{max_parents},all,all,all"
     
     # Base command with enhanced reliability options
     cmd = [
@@ -473,7 +598,9 @@ def run_yt_dlp(url: str, output_template: str, save_mode: Optional[str] = None, 
         "--retry-sleep", "linear=1:5",
         "--no-check-certificates",  # Avoid SSL issues
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "--extractor-args", youtube_extractor_args,
     ]
+    cmd.extend(build_yt_dlp_cookie_args(cookies_path))
     
     # Subtitle handling logic
     if not no_subtitles:
@@ -523,6 +650,20 @@ def run_yt_dlp(url: str, output_template: str, save_mode: Optional[str] = None, 
             
             if console:
                 console.print(f"[red]Error on attempt {attempt + 1}: {last_error}[/red]")
+
+            normalized_error = error_output.lower()
+            if (
+                "sign in to confirm you're not a bot" in normalized_error
+                or "sign in to confirm you\u2019re not a bot" in normalized_error
+            ):
+                auth_hint = (
+                    "YouTube requires authentication. "
+                    "Provide cookies via --cookies."
+                )
+                last_error = f"{last_error} | {auth_hint}"
+                if console:
+                    console.print(f"[red]{auth_hint}[/red]")
+                break
             
             # Check for specific error patterns that might be retryable
             if any(pattern in error_output.lower() for pattern in [
@@ -554,7 +695,12 @@ def run_yt_dlp(url: str, output_template: str, save_mode: Optional[str] = None, 
         stderr=f"All {max_retries} attempts failed. Last error: {last_error}"
     )
 
-def download_audio(url: str, output_template: str, console=None) -> Optional[str]:
+def download_audio(
+    url: str,
+    output_template: str,
+    console=None,
+    cookies_path: Optional[str] = None,
+) -> Optional[str]:
     import os, subprocess, glob
     
     # Look for existing audio/video files first (including webm which can contain audio)
@@ -581,6 +727,7 @@ def download_audio(url: str, output_template: str, console=None) -> Optional[str
         "--output", f"{output_template}.%(ext)s",
         url
     ]
+    cmd_audio_only[1:1] = build_yt_dlp_cookie_args(cookies_path)
     
     try:
         result = subprocess.run(
@@ -625,6 +772,7 @@ def download_audio(url: str, output_template: str, console=None) -> Optional[str
         "--output", f"{output_template}.%(ext)s",
         url
     ]
+    cmd_video[1:1] = build_yt_dlp_cookie_args(cookies_path)
     
     try:
         result = subprocess.run(
@@ -789,7 +937,15 @@ def _merge_overlapping_captions(segments: list, console) -> list:
     console.print(f"[blue]Processed {len(segments)} captions into {len(final_merged)} clean segments[/blue]")
     return final_merged
 
-def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles: bool = False, save_mode: Optional[str] = None) -> str:
+def get_transcript(
+    base_name: str,
+    url: str,
+    config: dict,
+    console,
+    no_subtitles: bool = False,
+    save_mode: Optional[str] = None,
+    cookies_path: Optional[str] = None,
+) -> str:
     import glob, os
     if not no_subtitles:
         vtt_files = glob.glob(f"{base_name}*.vtt")
@@ -806,7 +962,12 @@ def get_transcript(base_name: str, url: str, config: dict, console, no_subtitles
                 # Continue to audio transcription workflow below
 
     console.print("[yellow]Initiating transcription workflow...")
-    audio_path = download_audio(url, base_name, console)
+    audio_path = download_audio(
+        url,
+        base_name,
+        console,
+        cookies_path=cookies_path,
+    )
     if audio_path:
         transcriber = Transcriber(config)
         transcript = transcriber.transcribe(audio_path, console)
@@ -1354,6 +1515,15 @@ def main(args):
     script_start_time = time.time()
 
     config = load_config()
+    cookies_path = resolve_yt_dlp_cookies(config, args)
+
+    min_comments = config.get('min_comments', 25)
+    if args.comments is not None:
+        min_comments = args.comments
+    config['min_comments'] = min_comments
+    args.comments = min_comments
+
+    comments_limit = max(min_comments, 100)
 
     # Determine if input is a file or a direct YouTube URL/identifier
     if is_youtube_url(args.input):
@@ -1469,7 +1639,17 @@ def main(args):
         console.rule(f"[bold green]Processing {video_id}")
 
         try:
-            run_yt_dlp(video_url, base_name, args.save, args.no_subtitles, console)
+            run_yt_dlp(
+                video_url,
+                base_name,
+                args.save,
+                args.no_subtitles,
+                console,
+                max_retries=3,
+                all_comments=args.all_comments,
+                comments_limit=comments_limit,
+                cookies_path=cookies_path,
+            )
 
             json_path = glob.glob(f"{base_name}*.info.json")[0]
             with open(json_path, 'r', encoding='utf-8') as f:
@@ -1477,11 +1657,36 @@ def main(args):
 
             # Update title from metadata
             item['video_title'] = data.get('title', 'Unknown')
+            
+            # Diagnostic check for comment extraction
+            extracted_comments = len(data.get('comments', []))
+            estimated_total = data.get('comment_count', 0)
+            if extracted_comments > 0 and estimated_total > 0:
+                extraction_ratio = (extracted_comments / estimated_total) * 100
+                if extraction_ratio < 70:  # Warn if we got less than 70% of comments
+                    console.print(f"[yellow]Warning: Only extracted {extracted_comments}/{estimated_total} comments ({extraction_ratio:.0f}%)[/yellow]")
+                    console.print(f"[dim]This may be due to YouTube's API pagination limits. Comments data is still valid for analysis.[/dim]")
+            elif estimated_total == 0 and extracted_comments > 0:
+                console.print(f"[green]Extracted {extracted_comments} comments (YouTube total count not available)[/green]")
 
-            transcript = get_transcript(base_name, video_url, config, console, args.no_subtitles, args.save)
+            transcript = get_transcript(
+                base_name,
+                video_url,
+                config,
+                console,
+                args.no_subtitles,
+                args.save,
+                cookies_path=cookies_path,
+            )
 
             # Build intelligent context with token-based limits
-            context = build_intelligent_context(data, transcript, config, console)
+            context = build_intelligent_context(
+                data,
+                transcript,
+                config,
+                console,
+                prefer_comments=args.all_comments,
+            )
 
             summary = generate_summary(context, config, console)
 

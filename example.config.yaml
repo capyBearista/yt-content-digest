@@ -38,6 +38,13 @@ min_comments: 25
 
 
 # ==========================================
+# YT-DLP COOKIES
+# ==========================================
+# Optional. Path to a Netscape cookies.txt file for YouTube access.
+yt_dlp_cookies: "relative/path/to/cookies.txt"
+
+
+# ==========================================
 # TRANSCRIPTION SETTINGS
 # ==========================================
 # Options: 
@@ -63,5 +70,7 @@ api_keys:
   CEREBRAS_API_KEY: "..."
   GEMINI_API_KEY: "..."
   GROQ_API_KEY: "..."
+  # Optional: set for faster model downloads from Hugging Face (not required).
+  HF_TOKEN: ""
   OPENAI_API_KEY: "..."
   OPENROUTER_API_KEY: "..."
