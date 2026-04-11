@@ -276,6 +276,27 @@ def build_yt_dlp_cookie_args(cookies_path: Optional[str]) -> List[str]:
         return ["--cookies", cookies_path]
     return []
 
+def build_yt_dlp_js_runtime_args(console=None) -> List[str]:
+    """Build yt-dlp JS runtime arguments for EJS challenge solving."""
+    import shutil
+
+    runtime_specs = []
+    for runtime in ("node", "deno", "bun"):
+        runtime_path = shutil.which(runtime)
+        if runtime_path:
+            runtime_specs.append(f"{runtime}:{runtime_path}")
+
+    if runtime_specs:
+        return ["--js-runtimes", ",".join(runtime_specs)]
+
+    if console:
+        console.print(
+            "[yellow]Warning: No JavaScript runtime found (node/deno/bun). "
+            "YouTube extraction may fail with n-challenge errors.[/yellow]"
+        )
+
+    return []
+
 def validate_config(config: dict) -> None:
     """Validate configuration and check API key availability for configured providers"""
     import os
@@ -601,6 +622,7 @@ def run_yt_dlp(
         "--extractor-args", youtube_extractor_args,
     ]
     cmd.extend(build_yt_dlp_cookie_args(cookies_path))
+    cmd.extend(build_yt_dlp_js_runtime_args(console))
     
     # Subtitle handling logic
     if not no_subtitles:
@@ -616,7 +638,7 @@ def run_yt_dlp(
         pass
     else:
         # Default behavior: skip video download for performance optimization
-        cmd.extend(["--skip-download"])
+        cmd.extend(["--skip-download", "--ignore-no-formats-error"])
     
     cmd.extend([
         "--output", output_template,
@@ -664,6 +686,19 @@ def run_yt_dlp(
                 if console:
                     console.print(f"[red]{auth_hint}[/red]")
                 break
+
+            if (
+                "no supported javascript runtime could be found" in normalized_error
+                or "n challenge solving failed" in normalized_error
+            ):
+                runtime_hint = (
+                    "yt-dlp JavaScript challenge solving failed. "
+                    "Install node/deno/bun and ensure it is available in PATH."
+                )
+                last_error = f"{last_error} | {runtime_hint}"
+                if console:
+                    console.print(f"[red]{runtime_hint}[/red]")
+                break
             
             # Check for specific error patterns that might be retryable
             if any(pattern in error_output.lower() for pattern in [
@@ -702,6 +737,7 @@ def download_audio(
     cookies_path: Optional[str] = None,
 ) -> Optional[str]:
     import os, subprocess, glob
+    js_runtime_args = build_yt_dlp_js_runtime_args(console)
     
     # Look for existing audio/video files first (including webm which can contain audio)
     audio_extensions = ['*.mp3', '*.m4a', '*.aac', '*.opus', '*.webm', '*.mp4', '*.mkv']
@@ -727,6 +763,7 @@ def download_audio(
         "--output", f"{output_template}.%(ext)s",
         url
     ]
+    cmd_audio_only[1:1] = js_runtime_args
     cmd_audio_only[1:1] = build_yt_dlp_cookie_args(cookies_path)
     
     try:
@@ -772,6 +809,7 @@ def download_audio(
         "--output", f"{output_template}.%(ext)s",
         url
     ]
+    cmd_video[1:1] = js_runtime_args
     cmd_video[1:1] = build_yt_dlp_cookie_args(cookies_path)
     
     try:
