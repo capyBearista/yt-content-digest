@@ -72,6 +72,62 @@ def count_tokens(text: str, encoding) -> int:
         return 0
     return len(encoding.encode(text))
 
+def bootstrap_repo_virtualenv() -> None:
+    """Prefer the repo virtualenv when the script runs outside it."""
+    from pathlib import Path
+    import os
+
+    repo_root = Path(__file__).resolve().parent
+    site_packages_candidates = sorted(
+        (repo_root / ".venv" / "lib").glob("python*/site-packages")
+    )
+
+    for site_packages in site_packages_candidates:
+        site_packages_path = str(site_packages)
+        if site_packages_path not in sys.path:
+            sys.path.insert(0, site_packages_path)
+
+        existing_pythonpath = os.environ.get("PYTHONPATH")
+        if existing_pythonpath:
+            pythonpath_parts = existing_pythonpath.split(os.pathsep)
+            if site_packages_path not in pythonpath_parts:
+                os.environ["PYTHONPATH"] = os.pathsep.join(
+                    [site_packages_path, existing_pythonpath]
+                )
+        else:
+            os.environ["PYTHONPATH"] = site_packages_path
+
+        break
+
+
+bootstrap_repo_virtualenv()
+
+def resolve_yt_dlp_command() -> list[str]:
+    """Resolve yt-dlp through the repo virtualenv or system PATH."""
+    from pathlib import Path
+    import os
+    import shutil
+
+    repo_root = Path(__file__).resolve().parent
+    site_packages_candidates = sorted(
+        (repo_root / ".venv" / "lib").glob("python*/site-packages")
+    )
+
+    for site_packages in site_packages_candidates:
+        if (site_packages / "yt_dlp").exists():
+            existing_pythonpath = os.environ.get("PYTHONPATH", "")
+            pythonpath_parts = [str(site_packages)]
+            if existing_pythonpath:
+                pythonpath_parts.append(existing_pythonpath)
+            os.environ["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+            return [sys.executable, "-m", "yt_dlp"]
+
+    resolved = shutil.which("yt-dlp")
+    if resolved:
+        return [resolved]
+
+    return ["yt-dlp"]
+
 def build_intelligent_context(
     data: dict,
     transcript: str,
@@ -608,8 +664,7 @@ def run_yt_dlp(
         youtube_extractor_args = f"youtube:max_comments={comments_limit},{max_parents},all,all,all"
     
     # Base command with enhanced reliability options
-    cmd = [
-        "yt-dlp",
+    cmd = resolve_yt_dlp_command() + [
         "--write-info-json",
         "--write-comments",
         "--remote-components", "ejs:github",  # Enable JavaScript challenge solving
@@ -752,8 +807,7 @@ def download_audio(
     if console:
         console.print("[yellow]Attempting audio-only download (no conversion)...[/yellow]")
     
-    cmd_audio_only = [
-        "yt-dlp",
+    cmd_audio_only = resolve_yt_dlp_command() + [
         "-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=opus]/bestaudio[ext=aac]/bestaudio",
         "--remote-components", "ejs:github",
         "--retries", "3",
@@ -763,8 +817,9 @@ def download_audio(
         "--output", f"{output_template}.%(ext)s",
         url
     ]
-    cmd_audio_only[1:1] = js_runtime_args
-    cmd_audio_only[1:1] = build_yt_dlp_cookie_args(cookies_path)
+    insertion_index = len(resolve_yt_dlp_command())
+    cmd_audio_only[insertion_index:insertion_index] = js_runtime_args
+    cmd_audio_only[insertion_index:insertion_index] = build_yt_dlp_cookie_args(cookies_path)
     
     try:
         result = subprocess.run(
@@ -798,8 +853,7 @@ def download_audio(
     if console:
         console.print("[yellow]Downloading video file for audio extraction...[/yellow]")
     
-    cmd_video = [
-        "yt-dlp",
+    cmd_video = resolve_yt_dlp_command() + [
         "-f", "worst[height<=720]/worst",  # Get smaller video file to save bandwidth
         "--remote-components", "ejs:github",
         "--retries", "3",
@@ -809,8 +863,9 @@ def download_audio(
         "--output", f"{output_template}.%(ext)s",
         url
     ]
-    cmd_video[1:1] = js_runtime_args
-    cmd_video[1:1] = build_yt_dlp_cookie_args(cookies_path)
+    insertion_index = len(resolve_yt_dlp_command())
+    cmd_video[insertion_index:insertion_index] = js_runtime_args
+    cmd_video[insertion_index:insertion_index] = build_yt_dlp_cookie_args(cookies_path)
     
     try:
         result = subprocess.run(
