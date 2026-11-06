@@ -15,7 +15,7 @@ Plus, I wanted something that could scale up to more interesting analysis tasks 
 - **Process YouTube content flexibly**: Single videos, playlists, entire channels, or a mix of all three
 - **Smart transcription pipeline**: Uses existing subtitles when available, falls back to audio transcription when needed
 - **Multi-provider support**: Works with 100+ LLM providers via LiteLLM (OpenAI, Gemini, Groq, Ollama, etc.)
-- **Intelligent context building**: Token-aware assembly that prioritizes what matters most (title, description, top comments, transcript)
+- **Intelligent context building**: Token-aware assembly that prioritizes the title, description, like-ranked top-level comments with chronological replies, and transcript
 - **Batch processing**: Queue up multiple URLs and let it run
 
 ### Key Features
@@ -164,27 +164,38 @@ For additional options:
 **Environment management:** Use `uv pip install --python .venv/bin/python -r requirements.txt` whenever the project dependencies change. You do not need to activate the environment or install `pip` inside it.
 
 #### Advanced Options
-```bash
-# Include ALL comments (instead of just top 100)
-python ingest_video.py urls.txt --all-comments
 
-# Limit comment count
-python ingest_video.py urls.txt --comments 50
+```bash
+# Select up to 100 top-level comments by likes, with the 20 oldest replies each
+.venv/bin/python ingest_video.py urls.txt --top-comments 100 --replies-per-comment 20
+
+# Request all available top-level comments (still subject to context limits)
+.venv/bin/python ingest_video.py urls.txt --all-comments
 
 # Process more videos from a channel
-python ingest_video.py @LinuxfoundationOrg --channel-limit 25
+.venv/bin/python ingest_video.py @LinuxfoundationOrg --channel-limit 25
 
 # Process ALL videos from a channel (use with caution!)
-python ingest_video.py @LinuxfoundationOrg --channel-limit all
+.venv/bin/python ingest_video.py @LinuxfoundationOrg --channel-limit all
 
 # Skip subtitle download and force audio transcription
-python ingest_video.py urls.txt --no-subtitles
+.venv/bin/python ingest_video.py urls.txt --no-subtitles
 
 # Save mode options
-python ingest_video.py urls.txt --save meta    # Keep metadata/transcripts
-python ingest_video.py urls.txt --save video   # Keep video files
-python ingest_video.py urls.txt --save all     # Keep everything
+.venv/bin/python ingest_video.py urls.txt --save meta    # Keep metadata/transcripts
+.venv/bin/python ingest_video.py urls.txt --save video   # Keep video files
+.venv/bin/python ingest_video.py urls.txt --save all     # Keep everything
 ```
+
+#### Comment Threads
+
+Comments are organized by conversation rather than flattened into one list:
+
+- **Top-level comments**: Ranked by like count, highest first. By default, include up to **25** parents (or the `min_comments` setting in `config.yaml`). Override with `--top-comments N`. The existing `--comments N` flag remains an alias.
+- **Replies**: Grouped beneath their parent and sorted by timestamp, **oldest first**. Include up to **10** per parent by default; override with `--replies-per-comment N` (use `0` to omit replies).
+- **`--all-comments`**: Requests all available top-level comments and prioritizes them over transcript space. It bypasses the parent count cap, but still respects the replies-per-comment limit and the LLM context budget.
+
+The script fetches extra parent candidates, ranks the ones retrieved by likes, and selects the oldest available replies locally. YouTube may return incomplete comments or reply threads, so these limits are **maximums**, not guarantees. Replies with missing timestamps sort after dated replies. The model's context budget may reduce the final number of comments/replies or truncate the transcript.
 
 #### YouTube Bot-Check (Cookies)
 If you see an error like "Sign in to confirm you're not a bot", YouTube is
@@ -192,7 +203,7 @@ blocking unauthenticated requests. Export cookies from youtube.com in the
 Netscape cookies.txt format and pass them to yt-dlp.
 
 ```bash
-python ingest_video.py "https://www.youtube.com/watch?v=..." \
+.venv/bin/python ingest_video.py "https://www.youtube.com/watch?v=..." \
   --cookies /absolute/path/to/cookies.txt
 ```
 
@@ -206,7 +217,7 @@ Check out [`SUMMARY_example.md`](SUMMARY_example.md) to see what a generated sum
 - Key insights with timestamps
 - Detailed feature/topic breakdown tables
 - Community intelligence (positive highlights, criticisms, corrections, tips)
-- Raw data (title, description, full transcript, top comments)
+- Raw context used for summarization (title, description, included transcript, and threaded comments)
 
 ## Project Structure
 
@@ -232,18 +243,19 @@ yt-content-digest/
 
 1. **Input Processing**: Accepts file paths, direct URLs, channel usernames, or channel IDs. Automatically expands playlists and channels into individual video queues.
 
-2. **Download Pipeline**: Uses `yt-dlp` to extract metadata, comments, and subtitles to temporary files.
+2. **Download Pipeline**: Uses `yt-dlp` to extract metadata, candidate parent comments and their available replies, and subtitles to temporary files.
 
 3. **Transcription Strategy**: 
    - First checks for VTT subtitle files
    - Converts VTT to clean timestamp format (handles YouTube's overlapping captions)
    - Falls back to audio download + transcription if needed
 
-4. **Context Building**: Intelligently assembles content based on token limits:
-   - Always includes: Title + Description
-   - Guarantees: Minimum comment count (default: 25)
-   - Fills remaining space: Transcript (as much as possible)
-   - Uses correct tiktoken encoding for each provider/model
+4. **Context Building**: Assembles a token-budgeted LLM input:
+   - Includes the title and description first (oversized metadata may exceed the configured budget).
+   - Ranks fetched parent comments by likes and keeps up to the configured top-level limit (default: 25).
+   - Keeps up to the configured oldest replies under each parent (default: 10), preserving thread context.
+   - Allocates remaining space to the transcript; comments/replies may be omitted if the budget is insufficient.
+   - Uses `tiktoken` encoding heuristics based on the configured provider/model.
 
 5. **LLM Analysis**: Sends context to your configured LLM with a sophisticated system prompt designed to extract structured insights.
 
