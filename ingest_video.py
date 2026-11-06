@@ -73,30 +73,73 @@ def count_tokens(text: str, encoding) -> int:
     return len(encoding.encode(text))
 
 def resolve_yt_dlp_command() -> list[str]:
-    """Resolve yt-dlp through the repo virtualenv or system PATH."""
-    from pathlib import Path
-    import os
+    """Use yt-dlp from the active interpreter, without mixing Python installations."""
+    import importlib.util
     import shutil
 
-    repo_root = Path(__file__).resolve().parent
-    site_packages_candidates = sorted(
-        (repo_root / ".venv" / "lib").glob("python*/site-packages")
-    )
+    if importlib.util.find_spec("yt_dlp") is not None:
+        return [sys.executable, "-m", "yt_dlp"]
+    return [shutil.which("yt-dlp") or "yt-dlp"]
 
-    for site_packages in site_packages_candidates:
-        if (site_packages / "yt_dlp").exists():
-            existing_pythonpath = os.environ.get("PYTHONPATH", "")
-            pythonpath_parts = [str(site_packages)]
-            if existing_pythonpath:
-                pythonpath_parts.append(existing_pythonpath)
-            os.environ["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
-            return [sys.executable, "-m", "yt_dlp"]
 
-    resolved = shutil.which("yt-dlp")
-    if resolved:
-        return [resolved]
+def build_comment_threads(comments: list, top_limit: Optional[int],
+                          reply_limit: int) -> list:
+    """Group comments by parent, rank parents by likes, and order replies oldest-first.
 
-    return ["yt-dlp"]
+    Returns pairs of (parent, selected_replies), retaining the original
+    metadata dictionaries. Missing timestamps sort after known timestamps.
+    """
+    from collections import defaultdict
+
+    parents = []
+    replies_by_parent = defaultdict(list)
+    for comment in comments:
+        parent_id = comment.get("parent")
+        if parent_id in (None, "", "root"):
+            parents.append(comment)
+        else:
+            replies_by_parent[str(parent_id)].append(comment)
+
+    parents.sort(key=lambda c: c.get("like_count") or 0, reverse=True)
+    if top_limit is not None:
+        parents = parents[:top_limit]
+
+    def oldest_first(comment):
+        stamp = comment.get("timestamp")
+        valid = isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
+        return (not valid, stamp if valid else 0)
+
+    threads = []
+    for parent in parents:
+        replies = replies_by_parent.get(str(parent.get("id")), [])
+        replies = sorted(replies, key=oldest_first)
+        threads.append((parent, replies[:reply_limit]))
+    return threads
+
+
+def format_comment(comment: dict) -> str:
+    """Format a parent or reply with UTC timestamp and like count."""
+    from datetime import datetime, timezone
+
+    stamp = comment.get("timestamp")
+    if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+        date = datetime.fromtimestamp(stamp, timezone.utc).strftime(
+            "%Y-%m-%d %H:%M UTC"
+        )
+    else:
+        date = "time unknown"
+
+    author = comment.get("author") or "Anon"
+    likes = comment.get("like_count") or 0
+    body = (comment.get("text") or "").replace("\n", " ")
+    return f"[{likes} likes | {date}] {author}: {body}"
+
+
+def format_comment_thread(number: int, parent: dict, replies: list) -> str:
+    """Return a single parent block containing its oldest selected replies."""
+    lines = [f"{number}. {format_comment(parent)}"]
+    lines.extend(f"   ↳ {format_comment(reply)}" for reply in replies)
+    return "\n".join(lines)
 
 def build_intelligent_context(
     data: dict,
@@ -105,179 +148,145 @@ def build_intelligent_context(
     console,
     prefer_comments: bool = False,
 ) -> str:
-    """Build context string intelligently based on token limits and priority."""
-
-    # Get configuration values with defaults
-    max_tokens = config.get('max_context_tokens', 65536)
-    min_comments = config.get('min_comments', 25)
-    token_buffer = 500  # Larger buffer for safety due to encoding variations
-
-    # Get appropriate encoding
-    provider = config.get('llm_provider', 'openai')
-    model = config.get('llm_model', 'gpt-4')
+    """Build context while preserving parent/reply relationships and token limits."""
+    max_tokens = config.get("max_context_tokens", 65536)
+    token_buffer = 500
+    provider = config.get("llm_provider", "openai")
+    model = config.get("llm_model", "gpt-4")
     encoding = get_encoding_for_model(provider, model)
 
     console.print(
-        "[blue]Building context with max "
-        f"{max_tokens} tokens using {encoding.name} encoding[/blue]"
+        f"[blue]Building context with max {max_tokens} tokens "
+        f"using {encoding.name} encoding[/blue]"
     )
 
-    # Always include title and description
-    title = data.get('title', '')
-    description = data.get('description', '')
+    title = data.get("title") or ""
+    description = data.get("description") or ""
+    prefix = f"TITLE: {title}\nDESCRIPTION:\n{description}\n\nTRANSCRIPT:\n"
+    separator = "\n\nCOMMENTS:\n"
+    reserved = count_tokens(prefix + separator, encoding) + token_buffer
 
-    title_tokens = count_tokens(f"TITLE: {title}\n", encoding)
-    desc_tokens = count_tokens(f"DESCRIPTION:\n{description}\n\n", encoding)
-    base_tokens = title_tokens + desc_tokens
-
-    console.print(
-        "[dim]Title: "
-        f"{title_tokens} tokens, Description: {desc_tokens} tokens[/dim]"
-    )
-
-    # Calculate available space for transcript and comments
-    available_tokens = max_tokens - base_tokens - token_buffer
-
-    if available_tokens <= 0:
-        console.print(f"[red]Warning: Title and description exceed token limit[/red]")
-        return f"TITLE: {title}\nDESCRIPTION:\n{description}\n\nTRANSCRIPT:\n[Content too large]\n\nCOMMENTS:\n[Content too large]"
-
-    # Process comments and estimate tokens needed for minimum comments
-    comments = data.get('comments', [])
-    if comments:
-        comments.sort(key=lambda x: x.get('like_count', 0) or 0, reverse=True)
-
-    # Reserve space for "TRANSCRIPT:\n" and "COMMENTS:\n" headers
-    transcript_header_tokens = count_tokens("TRANSCRIPT:\n", encoding)
-    comments_header_tokens = count_tokens("\n\nCOMMENTS:\n", encoding)
-
-    # Estimate tokens for minimum comments
-    comments_text_lines = []
-    comments_tokens = 0
-    target_comments = min(min_comments, len(comments))
-
-    if prefer_comments:
-        comments_budget = (
-            available_tokens
-            - transcript_header_tokens
-            - comments_header_tokens
+    if reserved >= max_tokens:
+        console.print("[red]Warning: Title and description exceed token budget[/red]")
+        return (
+            f"{prefix}[Content too large]"
+            f"{separator}[Content too large]"
         )
-        comments_budget = max(0, comments_budget)
 
-        for i, comment in enumerate(comments):
-            user = comment.get('author', 'Anon')
-            text = comment.get('text', '').replace('\n', ' ')
-            likes = comment.get('like_count', 0)
-            comment_line = f"{i+1}. [{likes} likes] {user}: {text}"
-            line_tokens = count_tokens(comment_line + "\n", encoding)
-            if comments_tokens + line_tokens > comments_budget:
-                break
-            comments_text_lines.append(comment_line)
-            comments_tokens += line_tokens
-    else:
-        for i, comment in enumerate(comments[:target_comments]):
-            user = comment.get('author', 'Anon')
-            text = comment.get('text', '').replace('\n', ' ')
-            likes = comment.get('like_count', 0)
-            comment_line = f"{i+1}. [{likes} likes] {user}: {text}"
-            line_tokens = count_tokens(comment_line + "\n", encoding)
-            comments_text_lines.append(comment_line)
-            comments_tokens += line_tokens
-
-    # Calculate space available for transcript
-    transcript_budget = (
-        available_tokens
-        - comments_tokens
-        - transcript_header_tokens
-        - comments_header_tokens
+    top_limit = None if prefer_comments else config.get(
+        "top_comments", config.get("min_comments", 25)
+    )
+    reply_limit = config.get("replies_per_comment", 10)
+    threads = build_comment_threads(
+        data.get("comments") or [], top_limit, reply_limit
     )
 
-    console.print(
-        "[dim]Reserved "
-        f"{comments_tokens} tokens for {len(comments_text_lines)} comments[/dim]"
-    )
-    console.print(
-        "[dim]Available for transcript: "
-        f"{transcript_budget} tokens[/dim]"
-    )
+    # Include each parent before its replies. Keep only the oldest reply prefix
+    # that fits, rather than splitting a reply or losing its parent context.
+    comments_budget = max_tokens - reserved
+    blocks = []
+    used_tokens = 0
+    included_replies = 0
 
-    # Process transcript within budget
-    if transcript_budget > 0:
-        # Encode transcript and cut off when budget exceeded
-        transcript_tokens = encoding.encode(transcript)
-        if len(transcript_tokens) <= transcript_budget:
-            # Entire transcript fits, use remaining space for more comments
-            used_transcript_tokens = len(transcript_tokens)
-            remaining_budget = transcript_budget - used_transcript_tokens
+    for parent, replies in threads:
+        number = len(blocks) + 1
+        block = format_comment_thread(number, parent, [])
+        block_tokens = count_tokens(block + "\n\n", encoding)
+        if used_tokens + block_tokens > comments_budget:
+            continue
 
-            console.print(
-                "[green]Full transcript included ("
-                f"{used_transcript_tokens} tokens)[/green]"
+        kept_replies = []
+        for reply in replies:
+            candidate = format_comment_thread(
+                number, parent, kept_replies + [reply]
             )
+            candidate_tokens = count_tokens(candidate + "\n\n", encoding)
+            if used_tokens + candidate_tokens > comments_budget:
+                break
+            kept_replies.append(reply)
+            block = candidate
+            block_tokens = candidate_tokens
 
-            # Add more comments if space available
-            if (
-                remaining_budget > 50
-                and len(comments_text_lines) < len(comments)
-                and not prefer_comments
-            ):
-                for i, comment in enumerate(
-                    comments[len(comments_text_lines):],
-                    len(comments_text_lines),
-                ):
-                    user = comment.get('author', 'Anon')
-                    text = comment.get('text', '').replace('\n', ' ')
-                    likes = comment.get('like_count', 0)
-                    comment_line = f"{i+1}. [{likes} likes] {user}: {text}"
-                    line_tokens = count_tokens(comment_line + "\n", encoding)
+        blocks.append(block)
+        used_tokens += block_tokens
+        included_replies += len(kept_replies)
 
-                    if line_tokens <= remaining_budget:
-                        comments_text_lines.append(comment_line)
-                        remaining_budget -= line_tokens
-                    else:
-                        break
+    console.print(
+        f"[dim]Included {len(blocks)}/{len(threads)} parent threads "
+        f"and {included_replies} replies[/dim]"
+    )
+    available_for_transcript = max(0, comments_budget - used_tokens)
+    console.print(
+        f"[dim]Available for transcript: {available_for_transcript} tokens[/dim]"
+    )
 
-                console.print(
-                    "[green]Added "
-                    f"{len(comments_text_lines) - target_comments} "
-                    "additional comments[/green]"
-                )
-
-            final_transcript = transcript
-        else:
-            # Truncate transcript to fit budget
-            truncated_tokens = transcript_tokens[:transcript_budget]
-            final_transcript = encoding.decode(truncated_tokens)
-            console.print(f"[yellow]Transcript truncated to {transcript_budget} tokens[/yellow]")
+    transcript_tokens = encoding.encode(transcript)
+    if len(transcript_tokens) <= available_for_transcript:
+        final_transcript = transcript
+        console.print(
+            f"[green]Full transcript included ({len(transcript_tokens)} tokens)[/green]"
+        )
+    elif available_for_transcript > 0:
+        final_transcript = encoding.decode(
+            transcript_tokens[:available_for_transcript]
+        )
+        console.print(
+            f"[yellow]Transcript truncated to {available_for_transcript} tokens[/yellow]"
+        )
     else:
         final_transcript = "[Insufficient space for transcript]"
-        console.print(f"[red]Warning: No space available for transcript[/red]")
+        console.print("[yellow]Warning: No room for transcript[/yellow]")
 
-    # Build final context
-    comments_section = "\n".join(comments_text_lines) if comments_text_lines else "No comments found."
+    comments_section = "\n\n".join(blocks) if blocks else "No comments included."
+    context = f"{prefix}{final_transcript}{separator}{comments_section}"
 
-    context = f"TITLE: {title}\nDESCRIPTION:\n{description}\n\nTRANSCRIPT:\n{final_transcript}\n\nCOMMENTS:\n{comments_section}"
-
-    # Final token count verification
     final_tokens = count_tokens(context, encoding)
-    console.print(f"[green]Final context: {final_tokens} tokens (limit: {max_tokens})[/green]")
-
+    console.print(
+        f"[green]Final context: {final_tokens} tokens (limit: {max_tokens})[/green]"
+    )
     return context
+
+def positive_int(value: str) -> int:
+    try:
+        number = int(value)
+        if number > 0:
+            return number
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError("Must be a positive integer")
+
+
+def nonnegative_int(value: str) -> int:
+    try:
+        number = int(value)
+        if number >= 0:
+            return number
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError("Must be a nonnegative integer")
+
 
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("input", help="File with YouTube URLs OR a single YouTube URL")
     parser.add_argument(
-        "--comments",
-        type=int,
+        "--top-comments", "--comments",
+        dest="top_comments",
+        type=positive_int,
         default=None,
-        help="Minimum comments to include (overrides config.yaml)",
+        help="Top-level comments, sorted by likes (default: config min_comments or 25)",
+    )
+    parser.add_argument(
+        "--replies-per-comment",
+        type=nonnegative_int,
+        default=10,
+        help="Oldest replies to keep for each parent (default: 10; 0 disables replies)",
     )
     parser.add_argument(
         "--all-comments",
         action="store_true",
         help=(
-            "Request all comments from yt-dlp and prefer comments over transcript"
+            "Fetch all available parents and prioritize comments over transcript"
         ),
     )
     parser.add_argument("--no-subtitles", action="store_true", help="Skip subtitle download and directly download audio for transcription")
@@ -597,6 +606,7 @@ def run_yt_dlp(
     max_retries: int = 3,
     all_comments: bool = False,
     comments_limit: int = 100,
+    replies_per_comment: int = 10,
     cookies_path: Optional[str] = None,
 ):
     """Run yt-dlp with robust error handling and retry logic.
@@ -615,23 +625,20 @@ def run_yt_dlp(
     """
     import subprocess
 
-    # Configure YouTube extractor arguments for comment extraction
-    # Format: max-comments,max-parents,max-replies,max-replies-per-thread,max-depth
-    # NOTE: Even with these settings, YouTube's API may return fewer comments than expected
-    if all_comments:
-        # Request all comments with full pagination and all reply threads
-        # Using numeric "all" representation (API may still return partial results)
-        youtube_extractor_args = "youtube:max_comments=all,all,all,all,all"
-        if console:
-            console.print(
-                "[yellow]Note: Requesting all comments (YouTube API may return "
-                "partial results)[/yellow]"
-            )
-    else:
-        # Limit comments but still try to get full pagination within limit
-        # Allocate limit across parents and replies for better distribution
-        max_parents = comments_limit
-        youtube_extractor_args = f"youtube:max_comments={comments_limit},{max_parents},all,all,all"
+    # Fetch extra parent candidates; rerank by actual likes locally.
+    # Fetch available replies without early truncation, then locally select
+    # the oldest by timestamp. Large threads can be slow to retrieve.
+    parent_candidates = "all" if all_comments else str(comments_limit)
+    max_depth = 1 if replies_per_comment == 0 else 2
+    youtube_extractor_args = (
+        "youtube:comment_sort=top;"
+        f"max_comments=all,{parent_candidates},all,all,{max_depth}"
+    )
+    if all_comments and console:
+        console.print(
+            "[yellow]Note: Requesting all available comment threads; "
+            "YouTube may return incomplete results[/yellow]"
+        )
 
     # Base command with enhanced reliability options
     cmd = resolve_yt_dlp_command() + [
@@ -1048,20 +1055,18 @@ def get_transcript(
         return transcript
     return "[No transcript available]"
 
-def process_comments(data: dict, limit: int, fetch_all: bool) -> str:
-    comments = data.get('comments', [])
-    if not comments:
-        return "No comments found."
-    comments.sort(key=lambda x: x.get('like_count', 0) or 0, reverse=True)
-    count = len(comments) if fetch_all else min(limit, len(comments))
-    selected = comments[:count]
-    out = []
-    for i, c in enumerate(selected):
-        user = c.get('author', 'Anon')
-        text = c.get('text', '').replace('\n', ' ')
-        likes = c.get('like_count', 0)
-        out.append(f"{i+1}. [{likes} likes] {user}: {text}")
-    return "\n".join(out)
+def process_comments(data: dict, limit: int, fetch_all: bool,
+                     replies_per_comment: int = 10) -> str:
+    """Format threaded comments (retained for callers of this utility)."""
+    threads = build_comment_threads(
+        data.get("comments") or [],
+        None if fetch_all else limit,
+        replies_per_comment,
+    )
+    return "\n\n".join(
+        format_comment_thread(i, parent, replies)
+        for i, (parent, replies) in enumerate(threads, 1)
+    ) or "No comments found."
 
 def generate_summary(context: str, config: dict, console) -> str:
     if 'llm_provider' not in config:
@@ -1090,7 +1095,7 @@ You prioritize accuracy over hype. You strictly distinguish between "observable 
 You will receive a raw text dump containing:
 1. Video Title & Description
 2. Transcript (Time-coded: [start -> end] Text)
-3. Top Comments (with like counts)
+3. Top-level comments ranked by likes, with their oldest replies in chronological order
 </input_data>
 
 <processing_rules>
@@ -1101,7 +1106,7 @@ You will receive a raw text dump containing:
 
 2. **Timestamp Integration**: For every "Key Insight," you MUST cite the approximate timestamp `(Time: MM:SS)` from the transcript where the point is discussed.
 
-3. **Community Synthesis**: Look beyond just disputes. Identify "Additive Context" (users providing tips, workarounds, or alternative tools mentioned in comments).
+3. **Community Synthesis**: Interpret replies in the context of their parent comments. Identify corrections, disputes, follow-up explanations, and additive tips. Do not treat a reply as an independent top-level opinion.
 </processing_rules>
 
 <output_format>
@@ -1580,13 +1585,18 @@ def main(args):
     config = load_config()
     cookies_path = resolve_yt_dlp_cookies(config, args)
 
-    min_comments = config.get('min_comments', 25)
-    if args.comments is not None:
-        min_comments = args.comments
-    config['min_comments'] = min_comments
-    args.comments = min_comments
+    top_comments = (
+        args.top_comments if args.top_comments is not None
+        else config.get("top_comments", config.get("min_comments", 25))
+    )
+    if not isinstance(top_comments, int) or top_comments <= 0:
+        raise ValueError("top_comments/min_comments must be a positive integer")
+    config["top_comments"] = top_comments
+    config["replies_per_comment"] = args.replies_per_comment
 
-    comments_limit = max(min_comments, 100)
+    # YouTube 'top' order is not a strict global like-count ranking, so
+    # fetch extra parent candidates before applying the local rank.
+    comments_limit = max(100, top_comments * 2)
 
     # Determine if input is a file or a direct YouTube URL/identifier
     if is_youtube_url(args.input):
@@ -1711,6 +1721,7 @@ def main(args):
                 max_retries=3,
                 all_comments=args.all_comments,
                 comments_limit=comments_limit,
+                replies_per_comment=args.replies_per_comment,
                 cookies_path=cookies_path,
             )
 
