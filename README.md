@@ -49,35 +49,47 @@ CHANNEL_username/               # Channel collection with info file
 ## Getting Started
 
 ### Prerequisites
-- Python 3.8+ (I'm using 3.11, but anything recent should work)
-- Virtual environment (recommended for cleaner dependency management)
-- API keys for whichever providers you want to use (or none if going fully local!)
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) for Python and dependency management.
+- Python 3.12 (recommended; `uv` can install it automatically).
+- `ffmpeg` for audio extraction and transcription fallback.
+- API credentials for your chosen cloud provider, or a running local LLM provider such as Ollama.
 
 ### Installation
 
 1. **Clone the repo**
-```bash
-git clone https://github.com/capyBearista/yt-content-digest.git
-cd yt-content-digest
-```
+   ```bash
+   git clone https://github.com/capyBearista/yt-content-digest.git
+   cd yt-content-digest
+   ```
 
-2. **Set up virtual environment**
-```bash
-python -m venv .venv
-source .venv/bin/activate  # On Linux/Mac
-# .venv\Scripts\activate   # On Windows
-```
+2. **Create a virtual environment**
+   ```bash
+   uv python install 3.12
+   uv venv --python 3.12 .venv
+   ```
 
 3. **Install dependencies**
-```bash
-pip install -r requirements.txt
-```
+   ```bash
+   uv pip install --python .venv/bin/python -r requirements.txt
+   ```
 
-4. **Configure your setup**
-```bash
-cp example.config.yaml config.yaml
-# Edit config.yaml with your preferred providers and API keys
-```
+4. **Configure the application**
+   ```bash
+   cp example.config.yaml config.yaml
+   ```
+
+   Edit `config.yaml` to select your transcription provider, LLM provider, model, and any required API keys. Do not overwrite an existing configuration containing your settings.
+
+5. **Run the application**
+   ```bash
+   .venv/bin/python ingest_video.py "https://youtu.be/kyK-MKRLRLk"
+   ```
+
+   Activation is unnecessary when calling the virtual environment's Python directly.
+
+   **Windows:** Use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
+   **Alternative:** A standard Python virtual environment with `pip` also works, but install dependencies into the same environment used to run the application. Avoid system-wide `pip` installations.
 
 ### Configuration
 
@@ -124,22 +136,32 @@ api_keys:
 ### Usage
 
 #### Basic Usage
-```bash
-# Activate your virtual environment first!
-source .venv/bin/activate
 
+Run all commands from the repository root using the project's virtual environment. On Linux/macOS:
+
+```bash
 # Process a single video
-python ingest_video.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+.venv/bin/python ingest_video.py "https://youtu.be/kyK-MKRLRLk"
 
 # Process URLs from a file (one URL per line)
-python ingest_video.py urls.txt
+.venv/bin/python ingest_video.py urls.txt
 
 # Process a playlist
-python ingest_video.py "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"
+.venv/bin/python ingest_video.py "https://www.youtube.com/playlist?list=PLAYLIST_ID"
 
-# Process a channel (default: 10 most recent videos)
-python ingest_video.py @LinuxfoundationOrg
+# Process a channel (default: 10 videos)
+.venv/bin/python ingest_video.py @LinuxfoundationOrg
 ```
+
+Individual video summaries are saved as `SUMMARY_<video_id>.md`. Playlist and channel summaries are organized into their respective output directories.
+
+For additional options:
+
+```bash
+.venv/bin/python ingest_video.py --help
+```
+
+**Environment management:** Use `uv pip install --python .venv/bin/python -r requirements.txt` whenever the project dependencies change. You do not need to activate the environment or install `pip` inside it.
 
 #### Advanced Options
 ```bash
