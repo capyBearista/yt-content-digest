@@ -84,36 +84,116 @@ def resolve_yt_dlp_command() -> list[str]:
 
 def build_comment_threads(comments: list, top_limit: Optional[int],
                           reply_limit: int) -> list:
-    """Group comments by parent, rank parents by likes, and order replies oldest-first.
+    """Rank top-level comments by likes and preserve nested reply threads.
 
-    Returns pairs of (parent, selected_replies), retaining the original
-    metadata dictionaries. Missing timestamps sort after known timestamps.
+    Select up to reply_limit *descendants total* per top-level comment,
+    preferring older timestamps. If a selected descendant has ancestors,
+    they also count toward the cap so every displayed reply has context.
+    Return (top_level_comment, [(depth, reply), ...]) pairs, where replies
+    are displayed as a tree with chronologically ordered siblings.
     """
     from collections import defaultdict
 
+    def oldest_first(comment):
+        stamp = comment.get("timestamp")
+        if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+            return (0, stamp)
+        return (1, 0)  # Undated replies come last; stable sort breaks ties.
+
     parents = []
-    replies_by_parent = defaultdict(list)
+    by_id = {}
+    children = defaultdict(list)
+
+    # Avoid duplicating IDs if YouTube returns the same comment twice.
     for comment in comments:
+        comment_id = comment.get("id")
+        if comment_id is not None:
+            key = str(comment_id)
+            if key in by_id:
+                continue
+            by_id[key] = comment
         parent_id = comment.get("parent")
         if parent_id in (None, "", "root"):
             parents.append(comment)
         else:
-            replies_by_parent[str(parent_id)].append(comment)
+            children[str(parent_id)].append(comment)
 
     parents.sort(key=lambda c: c.get("like_count") or 0, reverse=True)
     if top_limit is not None:
         parents = parents[:top_limit]
-
-    def oldest_first(comment):
-        stamp = comment.get("timestamp")
-        valid = isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
-        return (not valid, stamp if valid else 0)
+    for replies in children.values():
+        replies.sort(key=oldest_first)
 
     threads = []
     for parent in parents:
-        replies = replies_by_parent.get(str(parent.get("id")), [])
-        replies = sorted(replies, key=oldest_first)
-        threads.append((parent, replies[:reply_limit]))
+        root_id = parent.get("id")
+        if root_id is None or reply_limit == 0:
+            threads.append((parent, []))
+            continue
+        root_id = str(root_id)
+
+        # Discover the complete reachable thread (not just direct children).
+        reachable = []
+        visited = {root_id}
+        stack = list(reversed(children.get(root_id, [])))
+        while stack:
+            reply = stack.pop()
+            rid = reply.get("id")
+            if rid is None or str(rid) in visited:
+                continue
+            rid = str(rid)
+            visited.add(rid)
+            reachable.append(reply)
+            stack.extend(reversed(children.get(rid, [])))
+
+        # Find the oldest descendants across *all depths*.
+        # Preserve their ancestor chains without exceeding reply_limit.
+        reachable.sort(key=oldest_first)
+        selected_ids = set()
+        for reply in reachable:
+            chain = []
+            cursor = reply
+            chain_seen = set()
+            while cursor is not parent:
+                cid = str(cursor.get("id"))
+                if cid in chain_seen or cid == root_id:
+                    chain = []
+                    break
+                chain_seen.add(cid)
+                chain.append(cid)
+                cursor = by_id.get(str(cursor.get("parent")))
+                if cursor is None:
+                    chain = []  # Missing ancestor: do not invent a parent.
+                    break
+            if not chain:
+                continue
+            needed = set(chain) - selected_ids
+            if len(selected_ids) + len(needed) <= reply_limit:
+                selected_ids.update(needed)
+            if len(selected_ids) >= reply_limit:
+                break
+
+        # Display the selected subtree depth-first. Each sibling group is
+        # oldest-first, and the ancestor is always printed before children.
+        formatted_replies = []
+        stack = [(child, 1) for child in reversed(children.get(root_id, []))]
+        displayed_ids = {root_id}
+        while stack:
+            reply, depth = stack.pop()
+            rid = reply.get("id")
+            if rid is None:
+                continue
+            rid = str(rid)
+            if rid not in selected_ids or rid in displayed_ids:
+                continue
+            displayed_ids.add(rid)
+            formatted_replies.append((depth, reply))
+            stack.extend(
+                (child, depth + 1)
+                for child in reversed(children.get(rid, []))
+            )
+
+        threads.append((parent, formatted_replies))
     return threads
 
 
@@ -136,10 +216,12 @@ def format_comment(comment: dict) -> str:
 
 
 def format_comment_thread(number: int, parent: dict, replies: list) -> str:
-    """Return a single parent block containing its oldest selected replies."""
+    """Display selected replies with indentation reflecting their real depth."""
     lines = [f"{number}. {format_comment(parent)}"]
-    lines.extend(f"   ↳ {format_comment(reply)}" for reply in replies)
+    for depth, reply in replies:
+        lines.append(f"{'   ' * depth}↳ {format_comment(reply)}")
     return "\n".join(lines)
+
 
 def build_intelligent_context(
     data: dict,
@@ -626,10 +708,10 @@ def run_yt_dlp(
     import subprocess
 
     # Fetch extra parent candidates; rerank by actual likes locally.
-    # Fetch available replies without early truncation, then locally select
-    # the oldest by timestamp. Large threads can be slow to retrieve.
+    # Fetch all available nesting levels and available replies, then select
+    # the oldest descendants locally. Large threads can be slow to retrieve.
     parent_candidates = "all" if all_comments else str(comments_limit)
-    max_depth = 1 if replies_per_comment == 0 else 2
+    max_depth = "1" if replies_per_comment == 0 else "all"
     youtube_extractor_args = (
         "youtube:comment_sort=top;"
         f"max_comments=all,{parent_candidates},all,all,{max_depth}"
