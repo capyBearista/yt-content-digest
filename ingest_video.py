@@ -371,6 +371,7 @@ def get_parser():
             "Fetch all available parents and prioritize comments over transcript"
         ),
     )
+    parser.add_argument("--timestamps", action="store_true", help="Include transcript timestamps in summaries and saved transcript text")
     parser.add_argument("--no-subtitles", action="store_true", help="Skip subtitle download and directly download audio for transcription")
     parser.add_argument("--save", choices=["meta", "video", "all"], help="Save mode: meta (metadata/transcripts only), video (video file only), all (everything)")
     parser.add_argument("--channel-limit", type=channel_limit_type, default="10", help="Max videos to process from channels (positive integer or 'all', default: 10)")
@@ -961,6 +962,40 @@ def download_audio(
             console.print(f"[red]Unexpected download error: {e}[/red]")
         return None
 
+def format_transcript(transcript: str, include_timestamps: bool = False) -> str:
+    """Remove transcript cue timestamps by default, retaining the text and line order.
+
+    Handles local Whisper/Groq segment prefixes and raw VTT from OpenAI.
+    The original VTT metadata files are not modified.
+    """
+    if include_timestamps:
+        return transcript
+
+    import re
+
+    segment_prefix = re.compile(
+        r"^\s*\[\d+(?:\.\d+)?s\s*->\s*\d+(?:\.\d+)?s\]\s*"
+    )
+    vtt_timing = re.compile(
+        r"^\s*(?:\d{2}:)?\d{2}:\d{2}[.,]\d{3}\s*-->\s*"
+        r"(?:\d{2}:)?\d{2}:\d{2}[.,]\d{3}(?:\s+.*)?$"
+    )
+    lines = transcript.splitlines()
+    is_vtt = any(line.strip().startswith('WEBVTT') for line in lines[:2])
+    output = []
+    for i, line in enumerate(lines):
+        if is_vtt:
+            stripped = line.strip()
+            if stripped == 'WEBVTT' or vtt_timing.fullmatch(line):
+                continue
+            if stripped.isdigit() and i + 1 < len(lines) and vtt_timing.fullmatch(lines[i + 1]):
+                continue
+            if not stripped:
+                continue
+        output.append(segment_prefix.sub('', line))
+    return '\n'.join(output)
+
+
 def convert_vtt_to_clean_format(vtt_file_path: str, console) -> str:
     """
     Convert VTT subtitle file to clean transcript format with millisecond precision.
@@ -1097,6 +1132,7 @@ def get_transcript(
     no_subtitles: bool = False,
     save_mode: Optional[str] = None,
     cookies_path: Optional[str] = None,
+    include_timestamps: bool = False,
 ) -> str:
     import glob, os
     if not no_subtitles:
@@ -1106,6 +1142,7 @@ def get_transcript(
             try:
                 # Use VTT converter for clean formatting with millisecond precision
                 transcript = convert_vtt_to_clean_format(vtt_files[0], console)
+                transcript = format_transcript(transcript, include_timestamps)
                 console.print("[green]VTT file successfully converted to clean format[/green]")
                 return transcript
             except Exception as e:
@@ -1123,6 +1160,7 @@ def get_transcript(
     if audio_path:
         transcriber = Transcriber(config)
         transcript = transcriber.transcribe(audio_path, console)
+        transcript = format_transcript(transcript, include_timestamps)
 
         # Save transcript to file based on save_mode
         if save_mode in ["meta", "all"]:
@@ -1168,7 +1206,27 @@ def generate_summary(context: str, config: dict, console) -> str:
         model_id = f"{provider}/{model}"
         api_base = None
 
-    system_prompt = """<persona>
+    include_timestamps = config.get("transcript_timestamps", False)
+    transcript_description = (
+        "Transcript (Time-coded: [start -> end] Text)"
+        if include_timestamps else "Transcript (text without timestamps)"
+    )
+    timestamp_rule = (
+        '2. **Timestamp Integration**: For every "Key Insight," cite the approximate '
+        'timestamp (Time: MM:SS) from the transcript when available.'
+        if include_timestamps else
+        '2. **Timestamp Accuracy**: The transcript contains no timestamps. '
+        'Do not invent video times or cite timestamps in Key Insights.'
+    )
+    key_insights_template = (
+        "[Bullet points highlighting high-value takeaways. Include timestamps when available.]\n"
+        "- **[Concept Name]** (Time: [MM:SS]): [Explanation with attribution to the speaker]."
+        if include_timestamps else
+        "[Bullet points highlighting high-value takeaways without timestamps.]\n"
+        "- **[Concept Name]**: [Explanation with attribution to the speaker]."
+    )
+
+    system_prompt = f"""<persona>
 You are a Skeptical Content Archivist and Objective Observer. Your goal is to create a neutral, high-utility record of the video content.
 You prioritize accuracy over hype. You strictly distinguish between "observable facts" (what is shown) and "subjective claims" (what the speaker argues).
 </persona>
@@ -1176,7 +1234,7 @@ You prioritize accuracy over hype. You strictly distinguish between "observable 
 <input_data>
 You will receive a raw text dump containing:
 1. Video Title & Description
-2. Transcript (Time-coded: [start -> end] Text)
+2. {transcript_description}
 3. Top-level comments ranked by likes, with their oldest replies in chronological order
 </input_data>
 
@@ -1186,7 +1244,7 @@ You will receive a raw text dump containing:
    - *Good:* "The creator argues the tool is 10x faster, demonstrating a side-by-side comparison."
    - Use attribution verbs: "Claims," "Argues," "Suggests," "Demonstrates," "Opinions."
 
-2. **Timestamp Integration**: For every "Key Insight," you MUST cite the approximate timestamp `(Time: MM:SS)` from the transcript where the point is discussed.
+{timestamp_rule}
 
 3. **Community Synthesis**: Interpret replies in the context of their parent comments. Identify corrections, disputes, follow-up explanations, and additive tips. Do not treat a reply as an independent top-level opinion.
 </processing_rules>
@@ -1198,9 +1256,7 @@ You MUST strictly follow this Markdown structure. Do not output anything else.
 [A dense, cohesive paragraph summarizing the video's narrative and purpose. Use objective language. roughly 150-250 words.]
 
 ### Key Insights
-[Bullet points highlighting high-value takeaways. MUST include timestamps.]
-- **[Concept Name]** (Time: [MM:SS]): [Explanation with attribution to the speaker].
-- **[Concept Name]** (Time: [MM:SS]): [Explanation with attribution to the speaker].
+{key_insights_template}
 
 ### Detailed Breakdown
 [A dynamic table adapted to the video's domain. Choose the best columns for the content type.]
@@ -1675,6 +1731,7 @@ def main(args):
         raise ValueError("top_comments/min_comments must be a positive integer")
     config["top_comments"] = top_comments
     config["replies_per_comment"] = args.replies_per_comment
+    config["transcript_timestamps"] = args.timestamps
 
     # YouTube 'top' order is not a strict global like-count ranking, so
     # fetch extra parent candidates before applying the local rank.
@@ -1833,6 +1890,7 @@ def main(args):
                 args.no_subtitles,
                 args.save,
                 cookies_path=cookies_path,
+                include_timestamps=args.timestamps,
             )
 
             # Build intelligent context with token-based limits

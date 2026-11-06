@@ -163,6 +163,16 @@ For additional options:
 
 **Environment management:** Use `uv pip install --python .venv/bin/python -r requirements.txt` whenever the project dependencies change. You do not need to activate the environment or install `pip` inside it.
 
+#### Transcript Timestamps
+
+Transcripts are **timestamp-free by default** in the LLM context and saved transcript text. Pass `--timestamps` to keep the original cue timestamps:
+
+```bash
+.venv/bin/python ingest_video.py "https://youtu.be/kyK-MKRLRLk" --timestamps
+```
+
+The option works with downloaded subtitles and audio transcription. Original downloaded `.vtt` subtitles are not modified. When timestamps are omitted, the LLM is instructed not to invent video time references.
+
 #### Advanced Options
 
 ```bash

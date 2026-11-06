@@ -168,3 +168,77 @@ def test_yt_dlp_extractor_depth(reply_limit, expected_depth):
     assert cmd[cmd.index("--extractor-args") + 1] == (
         f"youtube:comment_sort=top;max_comments=all,200,all,all,{expected_depth}"
     )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("[1.200s -> 2.300s] Hello\n[2s -> 3s] world", "Hello\nworld"),
+        ("WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nHello\n\n2\n00:00:02.000 --> 00:00:03.000\nworld", "Hello\nworld"),
+        ("[Error: Missing API Key]", "[Error: Missing API Key]"),
+        ("The speaker said 01:23 during the talk", "The speaker said 01:23 during the talk"),
+    ],
+)
+def test_transcript_timestamp_format(raw, expected):
+    assert app.format_transcript(raw) == expected
+    assert app.format_transcript(raw, include_timestamps=True) == raw
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_timestamps_cli(enabled):
+    args = ["video"] + (["--timestamps"] if enabled else [])
+    assert app.get_parser().parse_args(args).timestamps is enabled
+
+
+def test_vtt_transcript_timestamp_mode(tmp_path):
+    (tmp_path / "video_a.en.vtt").write_text("test")
+    with patch.object(app, "convert_vtt_to_clean_format", return_value="[1.000s -> 2.000s] Hi"):
+        assert app.get_transcript(str(tmp_path / "video_a"), "unused", {}, _SilentConsole()) == "Hi"
+        assert app.get_transcript(
+            str(tmp_path / "video_a"), "unused", {}, _SilentConsole(), include_timestamps=True
+        ) == "[1.000s -> 2.000s] Hi"
+
+
+class _SilentConsole:
+    def print(self, *args, **kwargs):
+        pass
+
+
+def test_transcribed_text_saved_without_timestamps(tmp_path):
+    with (
+        patch.object(app, "download_audio", return_value=str(tmp_path / "audio.mp3")),
+        patch.object(app.Transcriber, "transcribe", return_value="[4s -> 5s] Hello"),
+        patch("os.path.exists", return_value=False),
+    ):
+        result = app.get_transcript(
+            str(tmp_path / "video_a"), "unused",
+            {"transcription_provider": "local"}, _SilentConsole(),
+            no_subtitles=True, save_mode="meta",
+        )
+    assert result == "Hello"
+    assert (tmp_path / "video_a_transcript.txt").read_text() == "Hello"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_summary_prompt_matches_timestamp_mode(enabled, monkeypatch):
+    import sys
+    from types import ModuleType
+
+    fake_litellm = ModuleType("litellm")
+    messages = []
+
+    def completion(**kwargs):
+        messages.extend(kwargs["messages"])
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    fake_litellm.completion = completion
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    config = {"llm_provider": "openrouter", "llm_model": "test", "transcript_timestamps": enabled}
+    assert app.generate_summary("context", config, _SilentConsole()) == "ok"
+    prompt = messages[0]["content"]
+    if enabled:
+        assert "Timestamp Integration" in prompt
+        assert "(Time: [MM:SS])" in prompt
+    else:
+        assert "Do not invent video times" in prompt
+        assert "(Time: [MM:SS])" not in prompt
