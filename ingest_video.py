@@ -963,7 +963,7 @@ def download_audio(
         return None
 
 def format_transcript(transcript: str, include_timestamps: bool = False) -> str:
-    """Remove transcript cue timestamps by default, retaining the text and line order.
+    """Remove transcript cue timestamps and join text into a paragraph by default.
 
     Handles local Whisper/Groq segment prefixes and raw VTT from OpenAI.
     The original VTT metadata files are not modified.
@@ -993,7 +993,7 @@ def format_transcript(transcript: str, include_timestamps: bool = False) -> str:
             if not stripped:
                 continue
         output.append(segment_prefix.sub('', line))
-    return '\n'.join(output)
+    return ' '.join(' '.join(output).split())
 
 
 def convert_vtt_to_clean_format(vtt_file_path: str, console) -> str:

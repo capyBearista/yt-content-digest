@@ -173,10 +173,11 @@ def test_yt_dlp_extractor_depth(reply_limit, expected_depth):
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("[1.200s -> 2.300s] Hello\n[2s -> 3s] world", "Hello\nworld"),
-        ("WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nHello\n\n2\n00:00:02.000 --> 00:00:03.000\nworld", "Hello\nworld"),
+        ("[1.200s -> 2.300s] Hello\n[2s -> 3s] world", "Hello world"),
+        ("WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nHello\n\n2\n00:00:02.000 --> 00:00:03.000\nworld", "Hello world"),
         ("[Error: Missing API Key]", "[Error: Missing API Key]"),
         ("The speaker said 01:23 during the talk", "The speaker said 01:23 during the talk"),
+        ("As chief technology officer, I have\nworked on more than 100 projects in the\nlast few months.", "As chief technology officer, I have worked on more than 100 projects in the last few months."),
     ],
 )
 def test_transcript_timestamp_format(raw, expected):
