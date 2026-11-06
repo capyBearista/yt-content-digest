@@ -34,7 +34,7 @@ def get_encoding_for_model(provider: str, model: str):
         import tiktoken
     except ImportError:
         raise ImportError("tiktoken is required for token counting. Install with: pip install tiktoken")
-    
+
     # Map providers to appropriate encodings
     if provider.lower() in ['openai']:
         # Use model-specific encoding for OpenAI
@@ -57,7 +57,7 @@ def channel_limit_type(value: str) -> str:
     """Custom type function for channel limit argument validation"""
     if value.lower() == 'all':
         return 'all'
-    
+
     try:
         num = int(value)
         if num <= 0:
@@ -71,36 +71,6 @@ def count_tokens(text: str, encoding) -> int:
     if not text:
         return 0
     return len(encoding.encode(text))
-
-def bootstrap_repo_virtualenv() -> None:
-    """Prefer the repo virtualenv when the script runs outside it."""
-    from pathlib import Path
-    import os
-
-    repo_root = Path(__file__).resolve().parent
-    site_packages_candidates = sorted(
-        (repo_root / ".venv" / "lib").glob("python*/site-packages")
-    )
-
-    for site_packages in site_packages_candidates:
-        site_packages_path = str(site_packages)
-        if site_packages_path not in sys.path:
-            sys.path.insert(0, site_packages_path)
-
-        existing_pythonpath = os.environ.get("PYTHONPATH")
-        if existing_pythonpath:
-            pythonpath_parts = existing_pythonpath.split(os.pathsep)
-            if site_packages_path not in pythonpath_parts:
-                os.environ["PYTHONPATH"] = os.pathsep.join(
-                    [site_packages_path, existing_pythonpath]
-                )
-        else:
-            os.environ["PYTHONPATH"] = site_packages_path
-
-        break
-
-
-bootstrap_repo_virtualenv()
 
 def resolve_yt_dlp_command() -> list[str]:
     """Resolve yt-dlp through the repo virtualenv or system PATH."""
@@ -136,47 +106,47 @@ def build_intelligent_context(
     prefer_comments: bool = False,
 ) -> str:
     """Build context string intelligently based on token limits and priority."""
-    
+
     # Get configuration values with defaults
     max_tokens = config.get('max_context_tokens', 65536)
     min_comments = config.get('min_comments', 25)
     token_buffer = 500  # Larger buffer for safety due to encoding variations
-    
+
     # Get appropriate encoding
     provider = config.get('llm_provider', 'openai')
     model = config.get('llm_model', 'gpt-4')
     encoding = get_encoding_for_model(provider, model)
-    
+
     console.print(
         "[blue]Building context with max "
         f"{max_tokens} tokens using {encoding.name} encoding[/blue]"
     )
-    
+
     # Always include title and description
     title = data.get('title', '')
     description = data.get('description', '')
-    
+
     title_tokens = count_tokens(f"TITLE: {title}\n", encoding)
     desc_tokens = count_tokens(f"DESCRIPTION:\n{description}\n\n", encoding)
     base_tokens = title_tokens + desc_tokens
-    
+
     console.print(
         "[dim]Title: "
         f"{title_tokens} tokens, Description: {desc_tokens} tokens[/dim]"
     )
-    
+
     # Calculate available space for transcript and comments
     available_tokens = max_tokens - base_tokens - token_buffer
-    
+
     if available_tokens <= 0:
         console.print(f"[red]Warning: Title and description exceed token limit[/red]")
         return f"TITLE: {title}\nDESCRIPTION:\n{description}\n\nTRANSCRIPT:\n[Content too large]\n\nCOMMENTS:\n[Content too large]"
-    
+
     # Process comments and estimate tokens needed for minimum comments
     comments = data.get('comments', [])
     if comments:
         comments.sort(key=lambda x: x.get('like_count', 0) or 0, reverse=True)
-    
+
     # Reserve space for "TRANSCRIPT:\n" and "COMMENTS:\n" headers
     transcript_header_tokens = count_tokens("TRANSCRIPT:\n", encoding)
     comments_header_tokens = count_tokens("\n\nCOMMENTS:\n", encoding)
@@ -185,7 +155,7 @@ def build_intelligent_context(
     comments_text_lines = []
     comments_tokens = 0
     target_comments = min(min_comments, len(comments))
-    
+
     if prefer_comments:
         comments_budget = (
             available_tokens
@@ -213,7 +183,7 @@ def build_intelligent_context(
             line_tokens = count_tokens(comment_line + "\n", encoding)
             comments_text_lines.append(comment_line)
             comments_tokens += line_tokens
-    
+
     # Calculate space available for transcript
     transcript_budget = (
         available_tokens
@@ -221,7 +191,7 @@ def build_intelligent_context(
         - transcript_header_tokens
         - comments_header_tokens
     )
-    
+
     console.print(
         "[dim]Reserved "
         f"{comments_tokens} tokens for {len(comments_text_lines)} comments[/dim]"
@@ -230,7 +200,7 @@ def build_intelligent_context(
         "[dim]Available for transcript: "
         f"{transcript_budget} tokens[/dim]"
     )
-    
+
     # Process transcript within budget
     if transcript_budget > 0:
         # Encode transcript and cut off when budget exceeded
@@ -239,12 +209,12 @@ def build_intelligent_context(
             # Entire transcript fits, use remaining space for more comments
             used_transcript_tokens = len(transcript_tokens)
             remaining_budget = transcript_budget - used_transcript_tokens
-            
+
             console.print(
                 "[green]Full transcript included ("
                 f"{used_transcript_tokens} tokens)[/green]"
             )
-            
+
             # Add more comments if space available
             if (
                 remaining_budget > 50
@@ -272,7 +242,7 @@ def build_intelligent_context(
                     f"{len(comments_text_lines) - target_comments} "
                     "additional comments[/green]"
                 )
-            
+
             final_transcript = transcript
         else:
             # Truncate transcript to fit budget
@@ -282,16 +252,16 @@ def build_intelligent_context(
     else:
         final_transcript = "[Insufficient space for transcript]"
         console.print(f"[red]Warning: No space available for transcript[/red]")
-    
+
     # Build final context
     comments_section = "\n".join(comments_text_lines) if comments_text_lines else "No comments found."
-    
+
     context = f"TITLE: {title}\nDESCRIPTION:\n{description}\n\nTRANSCRIPT:\n{final_transcript}\n\nCOMMENTS:\n{comments_section}"
-    
+
     # Final token count verification
     final_tokens = count_tokens(context, encoding)
     console.print(f"[green]Final context: {final_tokens} tokens (limit: {max_tokens})[/green]")
-    
+
     return context
 
 def get_parser():
@@ -356,16 +326,16 @@ def build_yt_dlp_js_runtime_args(console=None) -> List[str]:
 def validate_config(config: dict) -> None:
     """Validate configuration and check API key availability for configured providers"""
     import os
-    
+
     # Validate required fields
     required_fields = ['transcription_provider', 'llm_provider', 'llm_model']
     for field in required_fields:
         if field not in config:
             raise ValueError(f"{field} must be specified in config.yaml")
-    
+
     transcription_provider = config['transcription_provider'].lower()
     llm_provider = config['llm_provider'].lower()
-    
+
     # Validate transcription provider specific config
     if transcription_provider == 'local':
         if 'local_whisper_model' not in config:
@@ -378,7 +348,7 @@ def validate_config(config: dict) -> None:
             raise ValueError(f"{transcription_provider.upper()}_API_KEY must be provided in config.yaml api_keys section")
     else:
         raise ValueError(f"Unknown transcription provider: {transcription_provider}. Supported: local, openai, groq")
-    
+
     # Validate LLM provider specific config
     if llm_provider == 'ollama':
         if 'ollama_base_url' not in config:
@@ -412,10 +382,10 @@ def load_config(config_path="config.yaml"):
     for key, value in config.get('api_keys', {}).items():
         if value:
             os.environ[key] = value
-    
+
     # Validate configuration
     validate_config(config)
-    
+
     return config
 
 class Transcriber:
@@ -446,32 +416,32 @@ class Transcriber:
             raise ValueError("local_whisper_model must be specified in config.yaml when using local transcription")
         if 'local_whisper_compute_type' not in self.config:
             raise ValueError("local_whisper_compute_type must be specified in config.yaml when using local transcription")
-        
+
         model_size = self.config['local_whisper_model']
         # Force CPU fallback to avoid missing cuDNN issues on systems without cuDNN
         device = 'cpu'
         compute_type = self.config['local_whisper_compute_type']
- 
+
         console.print(f"[yellow]Loading faster-whisper model: {model_size} on {device} ({compute_type})...[/yellow]")
-        
+
         # Check if the file is a video format and inform user
         import os
         file_ext = os.path.splitext(audio_path)[1].lower()
         if file_ext in ['.webm', '.mp4', '.mkv', '.avi']:
             console.print(f"[dim]Note: Using video file ({file_ext}) for audio transcription[/dim]")
-        
+
         try:
             model = WhisperModel(model_size, device=device, compute_type=compute_type)
             console.print(f"[yellow]Transcribing audio (this may take 1-2 minutes for longer videos)...[/yellow]")
-            
+
             # Add progress indication
             import time
             start_time = time.time()
             segments, info = model.transcribe(audio_path, beam_size=5)
-            
+
             console.print(f"[dim]Detected language: {info.language} (probability {info.language_probability:.2f})[/dim]")
             console.print(f"[yellow]Processing transcription segments...[/yellow]")
-            
+
             output = []
             segment_count = 0
             for segment in segments:
@@ -480,12 +450,12 @@ class Transcriber:
                 text = segment.text.strip()
                 output.append(f"[{start}s -> {end}s] {text}")
                 segment_count += 1
-                
+
                 # Show progress every 50 segments
                 if segment_count % 50 == 0:
                     elapsed = time.time() - start_time
                     console.print(f"[dim]Processed {segment_count} segments ({elapsed:.1f}s elapsed)...[/dim]")
-            
+
             total_time = time.time() - start_time
             console.print(f"[green]Transcription completed: {segment_count} segments in {total_time:.1f}s[/green]")
             return "\n".join(output)
@@ -515,21 +485,21 @@ class Transcriber:
 
         # OpenAI client
         client = OpenAI(
-            api_key=api_key, 
+            api_key=api_key,
             base_url=base_url
         )
-        
+
         base_label = base_url or "https://api.openai.com/v1"
         console.print(f"[yellow]Sending audio to {self.provider.upper()} API (this will take several minutes for longer videos)...[/yellow]")
         console.print(f"[dim]Transcription request &#45;> provider={self.provider}, base_url={base_label}, model={model}, response_format={resp_format}[/dim]")
-        
+
         # Retry logic with exponential backoff
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
                     console.print(f"[yellow]Retry attempt {attempt + 1}/{max_retries}...[/yellow]")
-                
+
                 with open(audio_path, "rb") as file:
                     start_time = time.time()
                     transcription = client.audio.transcriptions.create(
@@ -537,23 +507,23 @@ class Transcriber:
                         file=file,
                         response_format=resp_format
                     )
-                    
+
                 elapsed_time = time.time() - start_time
                 console.print(f"[green]Transcription completed in {elapsed_time:.1f}s[/green]")
                 break  # Success, exit retry loop
-                
+
             except Exception as e:
                 error_type = type(e).__name__
                 error_msg = str(e)
-                
+
                 # Check if this is a retryable error
                 retryable_errors = [
                     "timeout", "timeouterror", "apiconnectionerror", "apitimeouterror",
                     "serviceunavailableerror", "ratelimiterror", "502", "503", "504", "429"
                 ]
-                
+
                 is_retryable = any(err in error_msg.lower() or err in error_type.lower() for err in retryable_errors)
-                
+
                 if is_retryable and attempt < max_retries - 1:
                     # Exponential backoff with jitter
                     sleep_time = (2 ** attempt) + time.time() % 1  # Add jitter
@@ -630,12 +600,12 @@ def run_yt_dlp(
     cookies_path: Optional[str] = None,
 ):
     """Run yt-dlp with robust error handling and retry logic.
-    
+
     KNOWN LIMITATION: YouTube's comment API has pagination/continuation limits.
     yt-dlp may not extract all comments even with max_comments=all settings.
     This appears to be a limitation of YouTube's API itself, not yt-dlp.
     See: https://github.com/yt-dlp/yt-dlp/issues/6290
-    
+
     Args:
         all_comments: If True, extract ALL comments (within API limits). If
             False, use comments_limit.
@@ -644,7 +614,7 @@ def run_yt_dlp(
         cookies_path: Path to a Netscape cookies.txt file for yt-dlp.
     """
     import subprocess
-    
+
     # Configure YouTube extractor arguments for comment extraction
     # Format: max-comments,max-parents,max-replies,max-replies-per-thread,max-depth
     # NOTE: Even with these settings, YouTube's API may return fewer comments than expected
@@ -662,7 +632,7 @@ def run_yt_dlp(
         # Allocate limit across parents and replies for better distribution
         max_parents = comments_limit
         youtube_extractor_args = f"youtube:max_comments={comments_limit},{max_parents},all,all,all"
-    
+
     # Base command with enhanced reliability options
     cmd = resolve_yt_dlp_command() + [
         "--write-info-json",
@@ -678,7 +648,7 @@ def run_yt_dlp(
     ]
     cmd.extend(build_yt_dlp_cookie_args(cookies_path))
     cmd.extend(build_yt_dlp_js_runtime_args(console))
-    
+
     # Subtitle handling logic
     if not no_subtitles:
         cmd.extend([
@@ -686,7 +656,7 @@ def run_yt_dlp(
             "--write-auto-subs",
             "--sub-lang", "en",
         ])
-    
+
     # Video download logic based on save_mode (default: no video download for optimization)
     if save_mode in ["video", "all"]:
         # Download video file (default yt-dlp behavior)
@@ -694,37 +664,37 @@ def run_yt_dlp(
     else:
         # Default behavior: skip video download for performance optimization
         cmd.extend(["--skip-download", "--ignore-no-formats-error"])
-    
+
     cmd.extend([
         "--output", output_template,
         url
     ])
-    
+
     last_error = None
     for attempt in range(max_retries):
         try:
             if console and attempt > 0:
                 console.print(f"[yellow]Retry attempt {attempt + 1}/{max_retries}...[/yellow]")
-            
+
             # Run with timeout to prevent hanging
             result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                check=True, 
+                cmd,
+                capture_output=True,
+                check=True,
                 timeout=300,  # 5 minute timeout
                 text=True
             )
             return result  # Success
-            
+
         except subprocess.TimeoutExpired as e:
             last_error = f"Command timed out after 5 minutes: {e}"
             if console:
                 console.print(f"[red]Timeout on attempt {attempt + 1}: {last_error}[/red]")
-                
+
         except subprocess.CalledProcessError as e:
             error_output = e.stderr if e.stderr else e.stdout if e.stdout else "No error output"
             last_error = f"Command failed with exit code {e.returncode}: {error_output}"
-            
+
             if console:
                 console.print(f"[red]Error on attempt {attempt + 1}: {last_error}[/red]")
 
@@ -754,10 +724,10 @@ def run_yt_dlp(
                 if console:
                     console.print(f"[red]{runtime_hint}[/red]")
                 break
-            
+
             # Check for specific error patterns that might be retryable
             if any(pattern in error_output.lower() for pattern in [
-                "network", "timeout", "connection", "temporary", "rate limit", 
+                "network", "timeout", "connection", "temporary", "rate limit",
                 "503", "502", "429", "throttling", "unavailable"
             ]):
                 if attempt < max_retries - 1:
@@ -767,21 +737,21 @@ def run_yt_dlp(
                         console.print(f"[yellow]Retryable error detected, sleeping {sleep_time:.1f}s before retry...[/yellow]")
                     time.sleep(sleep_time)
                     continue
-            
+
             # For non-retryable errors or final attempt, break immediately
             break
-            
+
         except Exception as e:
             last_error = f"Unexpected error: {e}"
             if console:
                 console.print(f"[red]Unexpected error on attempt {attempt + 1}: {last_error}[/red]")
             break
-    
+
     # If we get here, all attempts failed
     raise subprocess.CalledProcessError(
-        1, 
-        cmd, 
-        output=None, 
+        1,
+        cmd,
+        output=None,
         stderr=f"All {max_retries} attempts failed. Last error: {last_error}"
     )
 
@@ -793,7 +763,7 @@ def download_audio(
 ) -> Optional[str]:
     import os, subprocess, glob
     js_runtime_args = build_yt_dlp_js_runtime_args(console)
-    
+
     # Look for existing audio/video files first (including webm which can contain audio)
     audio_extensions = ['*.mp3', '*.m4a', '*.aac', '*.opus', '*.webm', '*.mp4', '*.mkv']
     for ext in audio_extensions:
@@ -802,11 +772,11 @@ def download_audio(
             if console:
                 console.print(f"[green]Found existing media file for transcription: {candidates[0]}[/green]")
             return candidates[0]
-    
+
     # Strategy 1: Try to download audio-only format without conversion
     if console:
         console.print("[yellow]Attempting audio-only download (no conversion)...[/yellow]")
-    
+
     cmd_audio_only = resolve_yt_dlp_command() + [
         "-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=opus]/bestaudio[ext=aac]/bestaudio",
         "--remote-components", "ejs:github",
@@ -820,16 +790,16 @@ def download_audio(
     insertion_index = len(resolve_yt_dlp_command())
     cmd_audio_only[insertion_index:insertion_index] = js_runtime_args
     cmd_audio_only[insertion_index:insertion_index] = build_yt_dlp_cookie_args(cookies_path)
-    
+
     try:
         result = subprocess.run(
-            cmd_audio_only, 
-            capture_output=True, 
-            check=True, 
+            cmd_audio_only,
+            capture_output=True,
+            check=True,
             timeout=600,  # 10 minute timeout
             text=True
         )
-        
+
         # Find the downloaded audio file
         for ext in audio_extensions:
             candidates = glob.glob(f"{output_template}{ext}")
@@ -837,7 +807,7 @@ def download_audio(
                 if console:
                     console.print(f"[green]Audio downloaded: {candidates[0]}[/green]")
                 return candidates[0]
-                
+
     except subprocess.CalledProcessError as e:
         if console:
             console.print(f"[yellow]Audio-only download failed, trying video download...[/yellow]")
@@ -848,11 +818,11 @@ def download_audio(
     except Exception as e:
         if console:
             console.print(f"[yellow]Audio download error: {e}, trying video download...[/yellow]")
-    
+
     # Strategy 2: Download video file (which often contains usable audio track)
     if console:
         console.print("[yellow]Downloading video file for audio extraction...[/yellow]")
-    
+
     cmd_video = resolve_yt_dlp_command() + [
         "-f", "worst[height<=720]/worst",  # Get smaller video file to save bandwidth
         "--remote-components", "ejs:github",
@@ -866,16 +836,16 @@ def download_audio(
     insertion_index = len(resolve_yt_dlp_command())
     cmd_video[insertion_index:insertion_index] = js_runtime_args
     cmd_video[insertion_index:insertion_index] = build_yt_dlp_cookie_args(cookies_path)
-    
+
     try:
         result = subprocess.run(
-            cmd_video, 
-            capture_output=True, 
-            check=True, 
+            cmd_video,
+            capture_output=True,
+            check=True,
             timeout=600,
             text=True
         )
-        
+
         # Find the downloaded video file
         for ext in audio_extensions:
             candidates = glob.glob(f"{output_template}{ext}")
@@ -883,11 +853,11 @@ def download_audio(
                 if console:
                     console.print(f"[green]Video file downloaded for transcription: {candidates[0]}[/green]")
                 return candidates[0]
-        
+
         if console:
             console.print("[yellow]No media file found after download[/yellow]")
         return None
-        
+
     except subprocess.TimeoutExpired:
         if console:
             console.print("[red]Video download timed out[/red]")
@@ -906,14 +876,14 @@ def convert_vtt_to_clean_format(vtt_file_path: str, console) -> str:
     """
     Convert VTT subtitle file to clean transcript format with millisecond precision.
     Handles YouTube's overlapping/incremental captions by deduplicating and merging.
-    
+
     Args:
         vtt_file_path: Path to the VTT file
         console: Rich console for output
-        
+
     Returns:
         Formatted transcript string in the format '[Xs.XXXs -> Ys.YYYs] Text content'
-        
+
     Raises:
         Exception: If VTT parsing fails, allowing fallback to audio transcription
     """
@@ -921,48 +891,48 @@ def convert_vtt_to_clean_format(vtt_file_path: str, console) -> str:
         import webvtt
     except ImportError as e:
         raise Exception(f"webvtt-py library not available: {e}")
-    
+
     try:
         # Parse the VTT file
         captions = webvtt.read(vtt_file_path)
         if not captions:
             raise Exception("No captions found in VTT file")
-        
+
         # Process captions to handle YouTube's overlapping/incremental text
         processed_segments = []
-        
+
         for caption in captions:
             start_seconds = caption.start_in_seconds
             end_seconds = caption.end_in_seconds
-            
+
             # Clean the text content (remove VTT markup, normalize whitespace)
             text = caption.text.strip()
             text = ' '.join(text.split())  # Normalize whitespace
-            
+
             if text and (end_seconds - start_seconds) > 0.1:  # Filter very short segments
                 processed_segments.append({
                     'start': start_seconds,
                     'end': end_seconds,
                     'text': text
                 })
-        
+
         if not processed_segments:
             raise Exception("No valid captions after filtering")
-        
+
         # Deduplicate and merge overlapping segments
         merged_segments = _merge_overlapping_captions(processed_segments, console)
-        
+
         # Convert to final format
         transcript_lines = []
         for segment in merged_segments:
             timestamp = f"[{segment['start']:.3f}s -> {segment['end']:.3f}s]"
             transcript_lines.append(f"{timestamp} {segment['text']}")
-        
+
         if not transcript_lines:
             raise Exception("No valid transcript lines after processing")
-            
+
         return '\n'.join(transcript_lines)
-        
+
     except Exception as e:
         console.print(f"[yellow]VTT parsing failed: {e}[/yellow]")
         raise Exception(f"VTT conversion failed: {e}")
@@ -974,33 +944,33 @@ def _merge_overlapping_captions(segments: list, console) -> list:
     """
     if not segments:
         return []
-    
+
     merged = []
-    
+
     for i, current in enumerate(segments):
         if i == 0:
             # First segment becomes the base
             merged.append(current.copy())
             continue
-            
+
         # Check for text overlap with the previous merged segment
         prev_merged = merged[-1]
         current_words = current['text'].split()
         prev_words = prev_merged['text'].split()
-        
+
         # Find overlap between end of previous and start of current
         best_overlap = 0
         overlap_start = 0
-        
+
         # Look for the longest overlap at the boundary
         for j in range(1, min(len(prev_words), len(current_words)) + 1):
             prev_suffix = prev_words[-j:]
             current_prefix = current_words[:j]
-            
+
             if prev_suffix == current_prefix:
                 best_overlap = j
                 overlap_start = j
-        
+
         if best_overlap > 0:
             # Remove overlapping text from current segment
             unique_words = current_words[best_overlap:]
@@ -1017,16 +987,16 @@ def _merge_overlapping_captions(segments: list, console) -> list:
         else:
             # No overlap, add as new segment
             merged.append(current.copy())
-    
+
     # Filter out very short or empty segments
     final_merged = []
     for segment in merged:
         text = segment['text'].strip()
         duration = segment['end'] - segment['start']
-        
+
         if text and duration > 0.5:  # Must have text and be at least 0.5s
             final_merged.append(segment)
-    
+
     console.print(f"[blue]Processed {len(segments)} captions into {len(final_merged)} clean segments[/blue]")
     return final_merged
 
@@ -1064,7 +1034,7 @@ def get_transcript(
     if audio_path:
         transcriber = Transcriber(config)
         transcript = transcriber.transcribe(audio_path, console)
-        
+
         # Save transcript to file based on save_mode
         if save_mode in ["meta", "all"]:
             transcript_path = f"{base_name}_transcript.txt"
@@ -1098,7 +1068,7 @@ def generate_summary(context: str, config: dict, console) -> str:
         raise ValueError("llm_provider must be specified in config.yaml")
     if 'llm_model' not in config:
         raise ValueError("llm_model must be specified in config.yaml")
-    
+
     provider = config['llm_provider']
     model = config['llm_model']
     custom_api_base = config.get('ollama_base_url')
@@ -1222,10 +1192,10 @@ def cleanup_files(base_name: str, save_mode: Optional[str], console) -> None:
     if save_mode == "all":
         # Keep everything
         return
-    
+
     import glob
     import os
-    
+
     def _remove_files(patterns: list):
         """Helper function to remove files matching patterns"""
         for pattern in patterns:
@@ -1238,26 +1208,26 @@ def cleanup_files(base_name: str, save_mode: Optional[str], console) -> None:
                     os.remove(file_path)
                 except (PermissionError, FileNotFoundError, OSError) as e:
                     console.print(f"[red]Error removing {file_path}: {e}[/red]")
-    
+
     if not save_mode:
         # Default: clean up everything except summary
         patterns_to_clean = [
             f"{base_name}*.info.json",
             f"{base_name}*.vtt",
-            f"{base_name}_transcript.txt", 
+            f"{base_name}_transcript.txt",
             f"{base_name}*.comments.json",
             f"{base_name}",     # Video file without extension
             f"{base_name}.*"    # Other files with extensions
         ]
         _remove_files(patterns_to_clean)
-        
+
     elif save_mode == "meta":
         # Keep: .info.json, .vtt, _transcript.txt, .comments.json
         # Remove: video files
         patterns_to_clean = [
             f"{base_name}",         # Video file without extension
             f"{base_name}.mp4",     # Common video extensions
-            f"{base_name}.webm", 
+            f"{base_name}.webm",
             f"{base_name}.mkv",
             f"{base_name}.avi",
             f"{base_name}.m4a",
@@ -1265,9 +1235,9 @@ def cleanup_files(base_name: str, save_mode: Optional[str], console) -> None:
             f"{base_name}.opus"
         ]
         _remove_files(patterns_to_clean)
-        
+
     elif save_mode == "video":
-        # Keep: video file only  
+        # Keep: video file only
         # Remove: everything else
         patterns_to_clean = [
             f"{base_name}*.info.json",
@@ -1293,31 +1263,31 @@ def main(args):
     def extract_video_id(url):
         """
         Extract YouTube video ID from various URL formats.
-        
+
         Handles:
         - https://www.youtube.com/watch?v=VIDEO_ID
         - https://youtu.be/VIDEO_ID
         - URLs with tracking parameters (?si=...&list=...)
-        
+
         Returns the clean video ID (11 characters, alphanumeric + hyphens/underscores)
         """
         # Remove any whitespace
         url = url.strip()
-        
+
         # Pattern for youtu.be/VIDEO_ID format
         youtu_be_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', url)
         if youtu_be_match:
             return youtu_be_match.group(1)
-        
+
         # Pattern for youtube.com/watch?v=VIDEO_ID format
         youtube_watch_match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', url)
         if youtube_watch_match:
             return youtube_watch_match.group(1)
-        
+
         # Fallback: try the old method for backward compatibility
         if 'v=' in url:
             return url.split('v=')[1].split('&')[0][:11]
-        
+
         # If no pattern matches, return None to indicate invalid URL
         return None
 
@@ -1326,15 +1296,15 @@ def main(args):
         # Full YouTube URLs
         if ('youtube.com' in input_str or 'youtu.be' in input_str) and ('http' in input_str):
             return True
-        
+
         # YouTube channel username format (@username)
         if input_str.startswith('@'):
             return True
-        
+
         # YouTube channel ID format (UC... with exactly 24 characters)
         if input_str.startswith('UC') and len(input_str) == 24:
             return True
-            
+
         return False
 
     def classify_url(url: str) -> tuple:
@@ -1603,7 +1573,7 @@ def main(args):
                 console.print(f"    Error: {r['error']}")
 
     console = Console() if Console else _FallbackConsole()
-    
+
     # Start timing the entire script execution
     script_start_time = time.time()
 
@@ -1639,7 +1609,7 @@ def main(args):
 
         with open(args.input, 'r') as f:
             urls = [l.strip() for l in f if l.strip()]
-        
+
         console.print(f"[blue]Processing {len(urls)} URLs from file: {args.input}[/blue]")
 
     # Expand playlists and build processing queue
@@ -1750,7 +1720,7 @@ def main(args):
 
             # Update title from metadata
             item['video_title'] = data.get('title', 'Unknown')
-            
+
             # Diagnostic check for comment extraction
             extracted_comments = len(data.get('comments', []))
             estimated_total = data.get('comment_count', 0)
