@@ -124,7 +124,7 @@ def format_comment(comment: dict) -> str:
     stamp = comment.get("timestamp")
     if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
         date = datetime.fromtimestamp(stamp, timezone.utc).strftime(
-            "%Y-%m-%d %H:%M UTC"
+            "%Y-%m-%d"
         )
     else:
         date = "time unknown"
